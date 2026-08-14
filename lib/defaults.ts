@@ -48,6 +48,7 @@ export const DEFAULT_SETTINGS: Settings = {
   reminderEnabled: false,
   backupFreq: 'none',
   lastBackupDate: null,
+  plan: 'free',
 };
 
 export const DEFAULT_DATA: AppData = {
@@ -65,4 +66,8 @@ export function genId(prefix = 'id'): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random()
     .toString(36)
     .slice(2, 8)}`;
+}
+
+export function clone<T>(obj: T): T {
+  return JSON.parse(JSON.stringify(obj)) as T;
 }

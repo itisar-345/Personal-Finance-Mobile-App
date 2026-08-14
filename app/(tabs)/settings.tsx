@@ -5,7 +5,7 @@ import { Sheet } from '@/components/Sheet';
 import { useStore } from '@/lib/store';
 import { DEFAULT_CURRENCIES } from '@/lib/defaults';
 import { formatMoney, todayISO } from '@/lib/format';
-import { Moon, Sun, Monitor, Lock, Download, Upload, Trash2, Bell, Coins, Calendar, FileText, Info, Tag, ChevronRight, Pause, Play } from 'lucide-react-native';
+import { Moon, Sun, Monitor, Lock, Trash2, Bell, Coins, Calendar, FileText, Info, Tag, ChevronRight, Pause, Play } from 'lucide-react-native';
 
 function formatBackupDate(iso: string): string {
   const d = new Date(iso);

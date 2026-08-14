@@ -150,6 +150,7 @@ export interface Settings {
   reminderEnabled: boolean;
   backupFreq: 'none' | 'weekly' | 'monthly';
   lastBackupDate: string | null;
+  plan: 'free' | 'paid';
 }
 
 export interface AppData {

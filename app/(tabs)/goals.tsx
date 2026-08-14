@@ -15,7 +15,7 @@ import {
   avgMonthlyExpenses,
 } from '@/lib/calc';
 import { formatMoney, formatPercent, formatMonths, todayISO } from '@/lib/format';
-import { Plus, Trash2, Target, Calculator, Shield, TrendingUp } from 'lucide-react-native';
+import { Trash2, Pencil } from 'lucide-react-native';
 import type { Goal } from '@/lib/types';
 
 type Tab = 'goals' | 'simulator' | 'emergency' | 'debt';
@@ -48,6 +48,7 @@ function GoalsTab() {
   const { data, palette, currency } = useUi();
   const { addGoal, updateGoal, deleteGoal } = useStore();
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [editingGoal, setEditingGoal] = useState<Goal | null>(null);
 
   return (
     <View style={{ gap: 14 }}>
@@ -71,7 +72,10 @@ function GoalsTab() {
                     <Text style={{ fontSize: 15, fontWeight: '700', color: palette.text }}>{g.name}</Text>
                     <Text style={{ fontSize: 11, color: palette.textMuted }}>{g.kind} · {months} mo left</Text>
                   </View>
-                  <Pressable onPress={() => deleteGoal(g.id)}>
+                  <Pressable onPress={() => setEditingGoal(g)} hitSlop={8}>
+                    <Pencil size={16} color={palette.primary} />
+                  </Pressable>
+                  <Pressable onPress={() => deleteGoal(g.id)} hitSlop={8}>
                     <Trash2 size={16} color={palette.danger} />
                   </Pressable>
                 </View>
@@ -92,30 +96,45 @@ function GoalsTab() {
       </Card>
 
       <GoalSheet visible={sheetOpen} onClose={() => setSheetOpen(false)} onAdd={addGoal} />
+      {editingGoal && (
+        <GoalSheet
+          visible={!!editingGoal}
+          onClose={() => setEditingGoal(null)}
+          initial={editingGoal}
+          onSave={(fields) => { updateGoal(editingGoal.id, fields); setEditingGoal(null); }}
+        />
+      )}
     </View>
   );
 }
 
-function GoalSheet({ visible, onClose, onAdd }: { visible: boolean; onClose: () => void; onAdd: (g: Omit<Goal, 'id'>) => void }) {
-  const [name, setName] = useState('');
-  const [kind, setKind] = useState<Goal['kind']>('retirement');
-  const [targetAmount, setTargetAmount] = useState('');
-  const [currentAmount, setCurrentAmount] = useState('');
-  const [targetDate, setTargetDate] = useState('');
-  const [monthlyContribution, setMonthlyContribution] = useState('');
+function GoalSheet({
+  visible, onClose, onAdd, onSave, initial,
+}: {
+  visible: boolean; onClose: () => void;
+  onAdd?: (g: Omit<Goal, 'id'>) => void;
+  onSave?: (g: Partial<Goal>) => void;
+  initial?: Goal;
+}) {
+  const [name, setName] = useState(initial?.name ?? '');
+  const [kind, setKind] = useState<Goal['kind']>(initial?.kind ?? 'retirement');
+  const [targetAmount, setTargetAmount] = useState(initial ? String(initial.targetAmount) : '');
+  const [currentAmount, setCurrentAmount] = useState(initial ? String(initial.currentAmount) : '');
+  const [targetDate, setTargetDate] = useState(initial?.targetDate ?? '');
+  const [monthlyContribution, setMonthlyContribution] = useState(initial ? String(initial.monthlyContribution) : '');
 
   const submit = () => {
     const ta = Number(targetAmount);
     const ca = Number(currentAmount) || 0;
     if (!name.trim() || !ta) return;
     const date = targetDate || new Date(Date.now() + 5 * 365 * 24 * 3600 * 1000).toISOString().slice(0, 10);
-    onAdd({ name: name.trim(), kind, targetAmount: ta, currentAmount: ca, targetDate: date, monthlyContribution: Number(monthlyContribution) || 0 });
-    setName(''); setTargetAmount(''); setCurrentAmount(''); setTargetDate(''); setMonthlyContribution('');
-    onClose();
+    const fields = { name: name.trim(), kind, targetAmount: ta, currentAmount: ca, targetDate: date, monthlyContribution: Number(monthlyContribution) || 0 };
+    if (initial && onSave) { onSave(fields); }
+    else { onAdd?.(fields); setName(''); setTargetAmount(''); setCurrentAmount(''); setTargetDate(''); setMonthlyContribution(''); onClose(); }
   };
 
   return (
-    <Sheet visible={visible} onClose={onClose} title="Add Goal">
+    <Sheet visible={visible} onClose={onClose} title={initial ? 'Edit Goal' : 'Add Goal'}>
       <Field label="Name">
         <Input value={name} onChangeText={setName} placeholder="e.g. Retirement Fund" />
       </Field>
@@ -140,7 +159,7 @@ function GoalSheet({ visible, onClose, onAdd }: { visible: boolean; onClose: () 
       <Field label="Monthly Contribution">
         <Input value={monthlyContribution} onChangeText={(t) => setMonthlyContribution(t.replace(/[^0-9.]/g, ''))} keyboardType="numeric" placeholder="0" />
       </Field>
-      <Button label="Add Goal" onPress={submit} style={{ marginTop: 8 }} />
+      <Button label={initial ? 'Save' : 'Add Goal'} onPress={submit} style={{ marginTop: 8 }} />
     </Sheet>
   );
 }

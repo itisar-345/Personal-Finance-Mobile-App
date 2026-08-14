@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { readData, writeData } from './storage';
 import type {
   AppData,
   Transaction,
@@ -16,8 +16,6 @@ import type {
 import { DEFAULT_DATA, genId } from './defaults';
 import { bandForAge } from './calc';
 import { hashPin } from './crypto';
-
-const STORAGE_KEY = 'fintrack:data:v1';
 
 interface StoreContextValue {
   data: AppData;
@@ -73,19 +71,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     (async () => {
-      try {
-        const raw = await AsyncStorage.getItem(STORAGE_KEY);
-        if (raw) {
-          const parsed = JSON.parse(raw) as AppData;
-          // merge defaults to fill missing fields
-          setData({
-            ...DEFAULT_DATA,
-            ...parsed,
-            settings: { ...DEFAULT_DATA.settings, ...parsed.settings },
-          });
-        }
-      } catch {
-        // ignore corrupt data
+      const parsed = await readData<AppData>();
+      if (parsed) {
+        setData({
+          ...DEFAULT_DATA,
+          ...parsed,
+          settings: { ...DEFAULT_DATA.settings, ...parsed.settings },
+        });
       }
       setReady(true);
     })();
@@ -93,28 +85,25 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const persist = useCallback(async (next: AppData) => {
     setData(next);
-    try {
-      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-    } catch {
-      // ignore write errors
-    }
+    await writeData(next);
   }, []);
+
+  const save = (next: AppData) => {
+    writeData(next).catch(() => {});
+  };
 
   const addTransaction = useCallback((t: Omit<Transaction, 'id'>) => {
     setData((prev) => {
       const next = { ...prev, transactions: [...prev.transactions, { ...t, id: genId('txn'), status: t.status || 'active' }] };
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+      save(next);
       return next;
     });
   }, []);
 
   const updateTransaction = useCallback((id: string, t: Partial<Transaction>) => {
     setData((prev) => {
-      const next = {
-        ...prev,
-        transactions: prev.transactions.map((x) => (x.id === id ? { ...x, ...t } : x)),
-      };
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+      const next = { ...prev, transactions: prev.transactions.map((x) => (x.id === id ? { ...x, ...t } : x)) };
+      save(next);
       return next;
     });
   }, []);
@@ -122,7 +111,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const deleteTransaction = useCallback((id: string) => {
     setData((prev) => {
       const next = { ...prev, transactions: prev.transactions.filter((x) => x.id !== id) };
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+      save(next);
       return next;
     });
   }, []);
@@ -130,7 +119,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const addCategory = useCallback((c: Omit<Category, 'id'>) => {
     setData((prev) => {
       const next = { ...prev, categories: [...prev.categories, { ...c, id: genId('cat') }] };
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+      save(next);
       return next;
     });
   }, []);
@@ -138,7 +127,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const deleteCategory = useCallback((id: string) => {
     setData((prev) => {
       const next = { ...prev, categories: prev.categories.filter((x) => x.id !== id) };
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+      save(next);
       return next;
     });
   }, []);
@@ -146,7 +135,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const addAsset = useCallback((a: Omit<Asset, 'id'>) => {
     setData((prev) => {
       const next = { ...prev, assets: [...prev.assets, { ...a, id: genId('ast'), status: a.status || 'active', date: a.date || new Date().toISOString().slice(0, 10) }] };
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+      save(next);
       return next;
     });
   }, []);
@@ -154,7 +143,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const updateAsset = useCallback((id: string, a: Partial<Asset>) => {
     setData((prev) => {
       const next = { ...prev, assets: prev.assets.map((x) => (x.id === id ? { ...x, ...a } : x)) };
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+      save(next);
       return next;
     });
   }, []);
@@ -166,7 +155,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         assets: prev.assets.filter((x) => x.id !== id),
         contributions: prev.contributions.filter((x) => x.holdingId !== id),
       };
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+      save(next);
       return next;
     });
   }, []);
@@ -174,7 +163,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const addInvestment = useCallback((i: Omit<Investment, 'id'>) => {
     setData((prev) => {
       const next = { ...prev, investments: [...prev.investments, { ...i, id: genId('inv'), status: i.status || 'active' }] };
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+      save(next);
       return next;
     });
   }, []);
@@ -187,7 +176,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         investments: [...prev.investments, { ...i, id: invId, status: i.status || 'active' }],
         contributions: [...prev.contributions, { ...c, id: genId('cnb'), holdingId: invId, status: c.status || 'active' }],
       };
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+      save(next);
       return next;
     });
   }, []);
@@ -195,7 +184,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const updateInvestment = useCallback((id: string, i: Partial<Investment>) => {
     setData((prev) => {
       const next = { ...prev, investments: prev.investments.map((x) => (x.id === id ? { ...x, ...i } : x)) };
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+      save(next);
       return next;
     });
   }, []);
@@ -207,7 +196,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         investments: prev.investments.filter((x) => x.id !== id),
         contributions: prev.contributions.filter((x) => x.holdingId !== id),
       };
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+      save(next);
       return next;
     });
   }, []);
@@ -215,7 +204,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const addDebt = useCallback((d: Omit<Debt, 'id'>) => {
     setData((prev) => {
       const next = { ...prev, debts: [...prev.debts, { ...d, id: genId('dbt'), status: d.status || 'active', date: d.date || new Date().toISOString().slice(0, 10) }] };
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+      save(next);
       return next;
     });
   }, []);
@@ -223,7 +212,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const updateDebt = useCallback((id: string, d: Partial<Debt>) => {
     setData((prev) => {
       const next = { ...prev, debts: prev.debts.map((x) => (x.id === id ? { ...x, ...d } : x)) };
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+      save(next);
       return next;
     });
   }, []);
@@ -235,7 +224,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         debts: prev.debts.filter((x) => x.id !== id),
         contributions: prev.contributions.filter((x) => x.holdingId !== id),
       };
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+      save(next);
       return next;
     });
   }, []);
@@ -243,7 +232,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const addGoal = useCallback((g: Omit<Goal, 'id'>) => {
     setData((prev) => {
       const next = { ...prev, goals: [...prev.goals, { ...g, id: genId('goal') }] };
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+      save(next);
       return next;
     });
   }, []);
@@ -251,7 +240,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const updateGoal = useCallback((id: string, g: Partial<Goal>) => {
     setData((prev) => {
       const next = { ...prev, goals: prev.goals.map((x) => (x.id === id ? { ...x, ...g } : x)) };
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+      save(next);
       return next;
     });
   }, []);
@@ -259,7 +248,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const deleteGoal = useCallback((id: string) => {
     setData((prev) => {
       const next = { ...prev, goals: prev.goals.filter((x) => x.id !== id) };
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+      save(next);
       return next;
     });
   }, []);
@@ -267,7 +256,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const addContribution = useCallback((c: Omit<Contribution, 'id'>) => {
     setData((prev) => {
       const next = { ...prev, contributions: [...prev.contributions, { ...c, id: genId('cnb'), status: c.status || 'active' }] };
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+      save(next);
       return next;
     });
   }, []);
@@ -275,7 +264,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const updateContribution = useCallback((id: string, c: Partial<Contribution>) => {
     setData((prev) => {
       const next = { ...prev, contributions: prev.contributions.map((x) => (x.id === id ? { ...x, ...c } : x)) };
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+      save(next);
       return next;
     });
   }, []);
@@ -283,7 +272,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const deleteContribution = useCallback((id: string) => {
     setData((prev) => {
       const next = { ...prev, contributions: prev.contributions.filter((x) => x.id !== id) };
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+      save(next);
       return next;
     });
   }, []);
@@ -297,7 +286,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         if (status === 'closed') patch.closedDate = iso;
         if (status === 'active') { patch.pausedDate = undefined; patch.closedDate = undefined; }
         const next = { ...prev, [kind]: (prev[kind] as any[]).map((x) => (x.id === id ? { ...x, ...patch } : x)) };
-        AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+        save(next);
         return next;
       });
     },
@@ -317,24 +306,22 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       if (status === 'closed') patch.closedDate = iso;
       if (status === 'active') { patch.pausedDate = undefined; patch.closedDate = undefined; }
       const next = { ...prev, contributions: prev.contributions.map((x) => (x.id === id ? { ...x, ...patch } : x)) };
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+      save(next);
       return next;
     });
   }, []);
 
   const updateSettings = useCallback(async (s: Partial<Settings>) => {
     const patch = { ...s };
-    // Hash PIN before storing
     if (s.pin !== undefined && s.pin !== null && s.pin !== '') {
       patch.pin = await hashPin(s.pin);
     }
     setData((prev) => {
-      // When age changes and allocation is not custom, recompute from age band
       if (s.age !== undefined && s.age !== null && !prev.settings.allocationTargets?.custom) {
         patch.allocationTargets = bandForAge(s.age);
       }
       const next = { ...prev, settings: { ...prev.settings, ...patch } };
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+      save(next);
       return next;
     });
   }, []);
@@ -342,7 +329,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const setAllocationTargets = useCallback((t: AllocationTarget) => {
     setData((prev) => {
       const next = { ...prev, settings: { ...prev.settings, allocationTargets: t } };
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+      save(next);
       return next;
     });
   }, []);

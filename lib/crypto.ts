@@ -14,5 +14,11 @@ export async function hashPin(pin: string): Promise<string> {
 
 export async function verifyPin(pin: string, hash: string): Promise<boolean> {
   const h = await hashPin(pin);
-  return h === hash;
+  // Constant-time comparison to prevent timing attacks (CWE-208)
+  const a = new TextEncoder().encode(h);
+  const b = new TextEncoder().encode(hash);
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
+  return diff === 0;
 }

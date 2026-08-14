@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TextInput } from 'react-native';
+import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { Button, Input, Field, useUi, Chip } from '../components/ui';
 import { useStore } from '../lib/store';
-import { bandForAge, bandLabelForAge, ALLOCATION_BANDS } from '../lib/calc';
+import { bandForAge, bandLabelForAge } from '../lib/calc';
 import { formatPercent } from '../lib/format';
 
 export function Onboarding() {
@@ -141,3 +141,4 @@ const styles = StyleSheet.create({
   bandItem: { fontSize: 12, width: '48%' },
   error: { fontSize: 13, marginTop: 8 },
 });
+
