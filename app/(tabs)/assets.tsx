@@ -236,11 +236,9 @@ function InvestmentsTab() {
                 const contributed = totalContributed(data.contributions, inv.id, today);
                 const costBasis = contributed > 0 ? contributed : inv.purchaseValue;
                 const gain = inv.currentValue - costBasis;
-                // Issue 5: CAGR is only meaningful for a single lump-sum purchase.
-                // With ongoing SIPs the purchaseDate anchors the full period for all contributions,
-                // understating CAGR. Show it only when there are no contributions recorded.
+                // CAGR is only meaningful for a single lump-sum; hide it when SIP contributions exist.
                 const contribs = data.contributions.filter((c) => c.holdingId === inv.id);
-                const cagrValue = contribs.length === 0 ? cagr(inv.purchaseValue, inv.currentValue, inv.purchaseDate) : null;
+                const cagrValue = contribs.length === 0 ? cagr(inv.purchaseValue, inv.currentValue, inv.purchaseDate, today) : null;
                 const isStale = inv.currentValue === inv.purchaseValue && contributed > inv.purchaseValue;
                 const monthly = monthlyContribution(data.contributions, inv.id);
                 return (

@@ -60,7 +60,7 @@ export default function TransactionsScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        {/* Summary — adapts to filter */}
+        {/* Summary */}
         <View style={styles.summaryRow}>
           {showIncomeCard && (
             <Card style={styles.summaryCard}>
@@ -80,13 +80,7 @@ export default function TransactionsScreen() {
               <Text style={[styles.summaryValue, { color: palette.primary }]}>{formatMoney(totals.savings, currency, { compact: true })}</Text>
             </Card>
           )}
-          {filter === 'income' && !showSavingsCard && (
-            <Card style={styles.summaryCard}>
-              <Text style={[styles.summaryLabel, { color: palette.textMuted }]}>Transactions</Text>
-              <Text style={[styles.summaryValue, { color: palette.text }]}>{shown.length}</Text>
-            </Card>
-          )}
-          {filter === 'expense' && !showSavingsCard && (
+          {(filter === 'income' || filter === 'expense') && (
             <Card style={styles.summaryCard}>
               <Text style={[styles.summaryLabel, { color: palette.textMuted }]}>Transactions</Text>
               <Text style={[styles.summaryValue, { color: palette.text }]}>{shown.length}</Text>
@@ -107,7 +101,7 @@ export default function TransactionsScreen() {
           <Chip label="Yearly" selected={period === 'annual'} onPress={() => setPeriod('annual')} />
         </View>
 
-        {/* Category breakdown — only for all/expense */}
+        {/* Category breakdown */}
         {showBreakdown && breakdown.length > 0 && (
           <Card>
             <SectionTitle title="Expense Breakdown" />
@@ -132,7 +126,7 @@ export default function TransactionsScreen() {
           </Card>
         )}
 
-        {/* Recurring — filtered */}
+        {/* Recurring transactions */}
         {recurring.length > 0 && (
           <Card>
             <SectionTitle title="Recurring" action={<Repeat size={16} color={palette.textMuted} />} />

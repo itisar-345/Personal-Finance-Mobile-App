@@ -179,23 +179,20 @@ export function computeRatios(data: AppData, refDate: string): Ratios {
   const avgMonthlySpend = avgMonthlyExpenses(data.transactions, refDate);
   const avgMonthlyInc = avgMonthlyIncome(data.transactions, refDate);
 
-  // Issue 1: debt with no income is the worst case, not safe — use Infinity so UI shows red/N/A
   const debtServiceRatio = avgMonthlyInc > 0 ? debtPmt / avgMonthlyInc : (debtPmt > 0 ? Infinity : 0);
   const totalAssetsPlusInvest = assets + invest;
   const debtToAsset = totalAssetsPlusInvest > 0 ? debt / totalAssetsPlusInvest : (debt > 0 ? Infinity : 0);
-
-  // Issue 2: no expense history → can't compute emergency fund months; return null instead of dividing by 1
   const emergencyFundMonths: number | null = avgMonthlySpend > 0 ? liquid / avgMonthlySpend : null;
 
   return {
     savings: totals.savings,
     savingsRate: totals.savingsRate,
-    cashToInvestment: invest > 0 ? totals.savings / invest : 0,
+    cashToInvestment: invest > 0 ? liquid / invest : 0,
     debtServiceRatio,
     debtServiceZone:
       !isFinite(debtServiceRatio) ? 'red' : debtServiceRatio < 0.2 ? 'green' : debtServiceRatio < 0.4 ? 'yellow' : 'red',
     emergencyFundMonths,
-    liquidityRatio: nw > 0 ? liquid / nw : 0,
+    liquidityRatio: avgMonthlySpend > 0 ? liquid / avgMonthlySpend : 0,
     debtToAsset,
     debtToAssetZone:
       !isFinite(debtToAsset) ? 'red' : debtToAsset < 0.3 ? 'green' : debtToAsset < 0.5 ? 'yellow' : 'red',
@@ -211,22 +208,22 @@ export function lifestyleInflation(
   const now = new Date();
   const thisYear = now.getFullYear();
   const lastYear = thisYear - 1;
-  const currentMonth = now.getMonth();
+  // Only compare fully completed months to avoid partial-month distortion (returns null in January).
+  const lastCompletedMonth = now.getMonth() - 1;
+  if (lastCompletedMonth < 0) return null;
   const ytdSpend = (year: number) =>
     transactions
-      .filter((t) => t.type === 'expense' && yearKey(t.date) === String(year) && new Date(t.date).getMonth() <= currentMonth)
+      .filter((t) => t.type === 'expense' && yearKey(t.date) === String(year) && new Date(t.date).getMonth() <= lastCompletedMonth)
       .reduce((s, t) => s + t.amount, 0);
   const ytdInc = (year: number) =>
     transactions
-      .filter((t) => t.type === 'income' && yearKey(t.date) === String(year) && new Date(t.date).getMonth() <= currentMonth)
+      .filter((t) => t.type === 'income' && yearKey(t.date) === String(year) && new Date(t.date).getMonth() <= lastCompletedMonth)
       .reduce((s, t) => s + t.amount, 0);
   const thisYearInc = ytdInc(thisYear);
   const lastYearInc = ytdInc(lastYear);
-  // Issue 4: no data at all → skip
   if (thisYearInc === 0 && lastYearInc === 0) return null;
   const dSpend = ytdSpend(thisYear) - ytdSpend(lastYear);
   const dInc = thisYearInc - lastYearInc;
-  // Issue 4: flat/falling income — still show spending delta as a ratio of last year's income baseline
   if (dInc <= 0) {
     const baseline = lastYearInc || thisYearInc;
     if (baseline <= 0) return null;
@@ -235,11 +232,11 @@ export function lifestyleInflation(
   return { value: dSpend / dInc, tag: 'lower-better' };
 }
 
-/** CAGR for a single investment. */
-export function cagr(purchaseValue: number, currentValue: number, purchaseDate: string): number {
-  const years =
-    (Date.now() - new Date(purchaseDate).getTime()) / (1000 * 60 * 60 * 24 * 365.25);
-  if (years <= 0 || purchaseValue <= 0) return 0;
+/** CAGR for a single investment relative to a reference date (defaults to today). */
+export function cagr(purchaseValue: number, currentValue: number, purchaseDate: string, asOf?: string): number {
+  const end = asOf ? new Date(asOf).getTime() : Date.now();
+  const years = (end - new Date(purchaseDate).getTime()) / (1000 * 60 * 60 * 24 * 365.25);
+  if (years <= 0 || purchaseValue <= 0 || currentValue <= 0) return 0;
   return Math.pow(currentValue / purchaseValue, 1 / years) - 1;
 }
 
@@ -307,18 +304,20 @@ export const ALLOCATION_BANDS: AllocationBand[] = [
   },
 ];
 
+function findBand(age: number): AllocationBand {
+  return (
+    ALLOCATION_BANDS.find((b) => age >= b.minAge && age <= b.maxAge) ??
+    (age < ALLOCATION_BANDS[0].minAge ? ALLOCATION_BANDS[0] : ALLOCATION_BANDS[ALLOCATION_BANDS.length - 1])
+  );
+}
+
 export function bandForAge(age: number): AllocationTarget {
-  const b =
-    ALLOCATION_BANDS.find((band) => age >= band.minAge && age <= band.maxAge) ||
-    ALLOCATION_BANDS[0];
+  const b = findBand(age);
   return { stocks: b.stocks, mutualfund: b.mutualfund, fd: b.fd, ppf: b.ppf, gold: b.gold, crypto: b.crypto, other: b.other, custom: false };
 }
 
 export function bandLabelForAge(age: number): string {
-  const b =
-    ALLOCATION_BANDS.find((band) => age >= band.minAge && age <= band.maxAge) ||
-    ALLOCATION_BANDS[0];
-  return b.label;
+  return findBand(age).label;
 }
 
 export interface ActualAllocation {
@@ -370,16 +369,15 @@ export function allocationDrift(actual: ActualAllocation, target: AllocationTarg
   }));
 }
 
-/** Simple amortization schedule projection. */
+/** Remaining months to pay off a debt using standard amortization. */
 export function debtPayoffMonths(debt: Debt): number {
-  if (debt.emi <= 0) return debt.tenureMonths;
+  if (debt.outstanding <= 0) return 0;
   const r = debt.interestRate / 100 / 12;
+  if (debt.emi <= 0) return debt.tenureMonths > 0 ? debt.tenureMonths : Infinity;
   if (r === 0) return Math.ceil(debt.outstanding / debt.emi);
-  // EMI must cover at least the monthly interest, otherwise the loan never amortizes
   const monthlyInterest = r * debt.outstanding;
   if (debt.emi <= monthlyInterest) return Infinity;
-  const n = -Math.log(1 - monthlyInterest / debt.emi) / Math.log(1 + r);
-  return Math.max(0, Math.ceil(n));
+  return Math.max(0, Math.ceil(-Math.log(1 - monthlyInterest / debt.emi) / Math.log(1 + r)));
 }
 
 /** Snowball: pay smallest balance first. Avalanche: highest interest first. Only active/paused debts. */
@@ -443,7 +441,7 @@ export function goalProgress(current: number, target: number): number {
   return Math.min(1, current / target);
 }
 
-// Issue 3: day-aware so Jan 31 → Feb 1 correctly returns 0 months, not 1
+/** Months remaining until a target date, day-aware (Jan 31 → Feb 1 = 0 months). */
 export function monthsUntil(dateStr: string): number {
   const now = new Date();
   const d = new Date(dateStr);
@@ -466,7 +464,7 @@ export function requiredMonthlyForGoal(
   return (remaining * r) / (Math.pow(1 + r, months) - 1);
 }
 
-/** Number of periods between two ISO dates for a given frequency. */
+/** Number of complete periods between two ISO dates for a given frequency. */
 function periodsBetween(start: string, end: string, freq: ContributionFreq): number {
   const s = new Date(start);
   const e = new Date(end);
@@ -474,10 +472,14 @@ function periodsBetween(start: string, end: string, freq: ContributionFreq): num
   switch (freq) {
     case 'weekly':
       return Math.floor(days / 7);
-    case 'monthly':
-      return (e.getFullYear() - s.getFullYear()) * 12 + (e.getMonth() - s.getMonth());
-    case 'quarterly':
-      return Math.floor(((e.getFullYear() - s.getFullYear()) * 12 + (e.getMonth() - s.getMonth())) / 3);
+    case 'monthly': {
+      const m = (e.getFullYear() - s.getFullYear()) * 12 + (e.getMonth() - s.getMonth());
+      return m - (e.getDate() < s.getDate() ? 1 : 0);
+    }
+    case 'quarterly': {
+      const m = (e.getFullYear() - s.getFullYear()) * 12 + (e.getMonth() - s.getMonth());
+      return Math.floor((m - (e.getDate() < s.getDate() ? 1 : 0)) / 3);
+    }
   }
 }
 
@@ -489,13 +491,11 @@ export function projectedContributionEntries(c: Contribution, asOf: string): { d
   if (c.type !== 'recurring') return [];
   const freq = c.freq || 'monthly';
   const start = new Date(c.startDate);
-  // For paused: stop at pausedDate. For closed: stop at closedDate. For active: stop at asOf.
   let endStr: string;
   if (c.status === 'paused' && c.pausedDate) endStr = c.pausedDate;
   else if (c.status === 'closed' && c.closedDate) endStr = c.closedDate;
   else endStr = asOf;
-  // Don't project past asOf for active/paused (closed is historical, cap at asOf too)
-  const endCap = new Date(asOf).getTime() < new Date(endStr).getTime() ? asOf : endStr;
+  const endCap = endStr < asOf ? endStr : asOf; // min(endStr, asOf) — ISO strings are lexicographically ordered
   const count = Math.max(0, periodsBetween(c.startDate, endCap, freq));
   const entries: { date: string; amount: number }[] = [];
   for (let i = 0; i <= count; i++) {
@@ -525,7 +525,7 @@ export function monthlyContribution(contributions: Contribution[], holdingId: st
     .filter((c) => c.holdingId === holdingId && isRecurringActive(c))
     .reduce((sum, c) => {
       const freq = c.freq || 'monthly';
-      const monthly = freq === 'weekly' ? c.amount * 4.33 : freq === 'quarterly' ? c.amount / 3 : c.amount;
+          const monthly = freq === 'weekly' ? (c.amount * 52) / 12 : freq === 'quarterly' ? c.amount / 3 : c.amount;
       return sum + monthly;
     }, 0);
 }
