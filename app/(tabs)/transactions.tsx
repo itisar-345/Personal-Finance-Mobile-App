@@ -40,12 +40,23 @@ export default function TransactionsScreen() {
   const catMap = useMemo(() => new Map(data.categories.map((c) => [c.id, c])), [data]);
 
   const breakdown = useMemo(() => {
-    return Object.entries(totals.byCategory)
-      .map(([id, amt]) => ({ id, name: catMap.get(id)?.name || 'Unknown', amount: amt, fixed: catMap.get(id)?.fixed, need: catMap.get(id)?.need }))
+    const txns = filter === 'all' ? periodTxns : periodTxns.filter((t) => t.type === filter);
+    return Object.entries(
+      txns.reduce<Record<string, number>>((acc, t) => {
+        const key = filter === 'all' ? t.type : t.categoryId;
+        acc[key] = (acc[key] || 0) + t.amount;
+        return acc;
+      }, {})
+    )
+      .map(([key, amount]) => ({
+        id: key,
+        name: filter === 'all' ? (key === 'income' ? 'Income' : 'Expense') : (catMap.get(key)?.name || 'Unknown'),
+        amount,
+        color: filter === 'all' ? (key === 'income' ? palette.success : palette.danger) : undefined,
+      }))
       .sort((a, b) => b.amount - a.amount);
-  }, [totals, catMap]);
+  }, [periodTxns, filter, catMap, palette]);
 
-  const showBreakdown = filter === 'all' || filter === 'expense';
   const showIncomeCard = filter === 'all' || filter === 'income';
   const showExpenseCard = filter === 'all' || filter === 'expense';
   const showSavingsCard = filter === 'all';
@@ -101,24 +112,18 @@ export default function TransactionsScreen() {
           <Chip label="Yearly" selected={period === 'annual'} onPress={() => setPeriod('annual')} />
         </View>
 
-        {/* Category breakdown */}
-        {showBreakdown && breakdown.length > 0 && (
+        {/* Donut breakdown */}
+        {breakdown.length > 0 && (
           <Card>
-            <SectionTitle title="Expense Breakdown" />
+            <SectionTitle title={filter === 'all' ? 'Income vs Expense' : filter === 'income' ? 'Income Breakdown' : 'Expense Breakdown'} />
             <DonutChart
-              data={breakdown.map((b, i) => ({ label: b.name, value: b.amount, color: palette.chart[i % palette.chart.length] }))}
+              data={breakdown.map((b, i) => ({ label: b.name, value: b.amount, color: b.color || palette.chart[i % palette.chart.length] }))}
             />
             <View style={styles.bdList}>
               {breakdown.map((b, i) => (
                 <View key={b.id} style={styles.bdRow}>
-                  <View style={[styles.bdDot, { backgroundColor: palette.chart[i % palette.chart.length] }]} />
+                  <View style={[styles.bdDot, { backgroundColor: b.color || palette.chart[i % palette.chart.length] }]} />
                   <Text style={[styles.bdName, { color: palette.text }]}>{b.name}</Text>
-                  {b.fixed !== undefined && (
-                    <Text style={[styles.bdTag, { color: palette.textMuted }]}>{b.fixed ? 'Fixed' : 'Variable'}</Text>
-                  )}
-                  {b.need !== undefined && (
-                    <Text style={[styles.bdTag, { color: palette.textMuted }]}>{b.need ? 'Need' : 'Want'}</Text>
-                  )}
                   <Text style={[styles.bdAmt, { color: palette.text }]}>{formatMoney(b.amount, currency, { compact: true })}</Text>
                 </View>
               ))}
@@ -370,7 +375,6 @@ const styles = StyleSheet.create({
   bdRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   bdDot: { width: 8, height: 8, borderRadius: 4 },
   bdName: { fontSize: 12, flex: 1 },
-  bdTag: { fontSize: 10 },
   bdAmt: { fontSize: 12, fontWeight: '700' },
   recurRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8 },
   recurName: { fontSize: 14, fontWeight: '600' },

@@ -28,7 +28,7 @@ interface StoreContextValue {
   addCategory: (c: Omit<Category, 'id'>) => void;
   deleteCategory: (id: string) => void;
   // assets
-  addAsset: (a: Omit<Asset, 'id'>) => void;
+  addAsset: (a: Omit<Asset, 'id'>) => string;
   updateAsset: (id: string, a: Partial<Asset>) => void;
   deleteAsset: (id: string) => void;
   // investments
@@ -132,12 +132,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const addAsset = useCallback((a: Omit<Asset, 'id'>) => {
+  const addAsset = useCallback((a: Omit<Asset, 'id'>): string => {
+    const id = genId('ast');
     setData((prev) => {
-      const next = { ...prev, assets: [...prev.assets, { ...a, id: genId('ast'), status: a.status || 'active', date: a.date || new Date().toISOString().slice(0, 10) }] };
+      const next = { ...prev, assets: [...prev.assets, { ...a, id, status: a.status || 'active', date: a.date || new Date().toISOString().slice(0, 10) }] };
       save(next);
       return next;
     });
+    return id;
   }, []);
 
   const updateAsset = useCallback((id: string, a: Partial<Asset>) => {

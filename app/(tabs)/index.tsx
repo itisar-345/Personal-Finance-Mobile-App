@@ -16,6 +16,7 @@ import {
   bandLabelForAge,
   allocationDrift,
   lifestyleInflation,
+  inPeriod,
 } from '@/lib/calc';
 import { formatMoney, formatPercent, todayISO, monthLabel } from '@/lib/format';
 import { TrendingUp, Wallet, Shield, AlertTriangle } from 'lucide-react-native';
@@ -53,6 +54,38 @@ export default function DashboardScreen() {
   const targetAlloc = data.settings.allocationTargets || (data.settings.age ? bandForAge(data.settings.age) : null);
   const drift = targetAlloc ? allocationDrift(actual, targetAlloc) : [];
   const lifeInfl = useMemo(() => lifestyleInflation(data.transactions, data.categories), [data]);
+
+  const catMap = useMemo(() => new Map(data.categories.map((c) => [c.id, c])), [data]);
+
+  const expenseBreakdown = useMemo(() => {
+    const map: Record<string, number> = {};
+    data.transactions.filter((t) => t.type === 'expense' && inPeriod(t.date, period, today))
+      .forEach((t) => { map[t.categoryId] = (map[t.categoryId] || 0) + t.amount; });
+    return Object.entries(map)
+      .map(([id, amount]) => ({ id, name: catMap.get(id)?.name || 'Unknown', amount }))
+      .sort((a, b) => b.amount - a.amount);
+  }, [data, period, today, catMap]);
+
+  const incomeBreakdown = useMemo(() => {
+    const map: Record<string, number> = {};
+    data.transactions.filter((t) => t.type === 'income' && inPeriod(t.date, period, today))
+      .forEach((t) => { map[t.categoryId] = (map[t.categoryId] || 0) + t.amount; });
+    return Object.entries(map)
+      .map(([id, amount]) => ({ id, name: catMap.get(id)?.name || 'Unknown', amount }))
+      .sort((a, b) => b.amount - a.amount);
+  }, [data, period, today, catMap]);
+
+  const assetTypeBreakdown = useMemo(() => {
+    const map: Record<string, number> = {};
+    data.assets.filter((a) => a.status !== 'closed').forEach((a) => { map[a.type] = (map[a.type] || 0) + a.value; });
+    return Object.entries(map).map(([type, value]) => ({ type, value })).sort((a, b) => b.value - a.value);
+  }, [data]);
+
+  const debtBreakdown = useMemo(() => {
+    const map: Record<string, number> = {};
+    data.debts.filter((d) => d.status !== 'closed').forEach((d) => { map[d.type] = (map[d.type] || 0) + d.outstanding; });
+    return Object.entries(map).map(([type, value]) => ({ type, value })).sort((a, b) => b.value - a.value);
+  }, [data]);
 
   const hasData = data.transactions.length > 0 || assets > 0 || invest > 0 || debt > 0;
 
@@ -189,6 +222,84 @@ export default function DashboardScreen() {
           </Card>
         )}
 
+        {/* Income breakdown — donut */}
+        {incomeBreakdown.length > 0 && (
+          <Card>
+            <SectionTitle title="Income by Category" />
+            <DonutChart
+              data={incomeBreakdown.map((b, i) => ({ label: b.name, value: b.amount, color: palette.chart[i % palette.chart.length] }))}
+            />
+            <View style={styles.legendList}>
+              {incomeBreakdown.map((b, i) => (
+                <View key={b.id} style={styles.legendRow}>
+                  <View style={[styles.legendDot, { backgroundColor: palette.chart[i % palette.chart.length] }]} />
+                  <Text style={{ fontSize: 12, flex: 1, color: palette.text }}>{b.name}</Text>
+                  <Text style={{ fontSize: 12, fontWeight: '700', color: palette.success }}>{formatMoney(b.amount, currency, { compact: true })}</Text>
+                </View>
+              ))}
+            </View>
+          </Card>
+        )}
+
+        {/* Expense breakdown — bar chart */}
+        {expenseBreakdown.length > 0 && (
+          <Card>
+            <SectionTitle title="Expense by Category" />
+            <BarChart
+              data={expenseBreakdown.map((b) => ({ label: b.name.slice(0, 6), value: b.amount }))}
+              color={palette.danger}
+            />
+            <View style={styles.legendList}>
+              {expenseBreakdown.map((b, i) => (
+                <View key={b.id} style={styles.legendRow}>
+                  <View style={[styles.legendDot, { backgroundColor: palette.chart[i % palette.chart.length] }]} />
+                  <Text style={{ fontSize: 12, flex: 1, color: palette.text }}>{b.name}</Text>
+                  <Text style={{ fontSize: 12, fontWeight: '700', color: palette.danger }}>{formatMoney(b.amount, currency, { compact: true })}</Text>
+                </View>
+              ))}
+            </View>
+          </Card>
+        )}
+
+        {/* Asset type breakdown — donut */}
+        {assetTypeBreakdown.length > 0 && (
+          <Card>
+            <SectionTitle title="Assets by Type" />
+            <DonutChart
+              data={assetTypeBreakdown.map((a, i) => ({ label: a.type, value: a.value, color: palette.chart[i % palette.chart.length] }))}
+            />
+            <View style={styles.legendList}>
+              {assetTypeBreakdown.map((a, i) => (
+                <View key={a.type} style={styles.legendRow}>
+                  <View style={[styles.legendDot, { backgroundColor: palette.chart[i % palette.chart.length] }]} />
+                  <Text style={{ fontSize: 12, flex: 1, color: palette.text, textTransform: 'capitalize' }}>{a.type}</Text>
+                  <Text style={{ fontSize: 12, fontWeight: '700', color: palette.text }}>{formatMoney(a.value, currency, { compact: true })}</Text>
+                </View>
+              ))}
+            </View>
+          </Card>
+        )}
+
+        {/* Debt breakdown — bar chart */}
+        {debtBreakdown.length > 0 && (
+          <Card>
+            <SectionTitle title="Debt by Type" />
+            <BarChart
+              data={debtBreakdown.map((d) => ({ label: d.type, value: d.value }))}
+              color={palette.danger}
+            />
+            <View style={styles.legendList}>
+              {debtBreakdown.map((d, i) => (
+                <View key={d.type} style={styles.legendRow}>
+                  <View style={[styles.legendDot, { backgroundColor: palette.danger }]} />
+                  <Text style={{ fontSize: 12, flex: 1, color: palette.text, textTransform: 'capitalize' }}>{d.type}</Text>
+                  <Text style={{ fontSize: 12, fontWeight: '700', color: palette.danger }}>{formatMoney(d.value, currency, { compact: true })}</Text>
+                </View>
+              ))}
+            </View>
+          </Card>
+        )}
+
         {!hasData && (
           <EmptyState title="No data yet" subtitle="Add your first income, expense, asset, or debt to see your dashboard come alive." />
         )}
@@ -250,6 +361,7 @@ const styles = StyleSheet.create({
   emergencyMonths: { fontSize: 28, fontWeight: '800' },
   emergencyLabel: { fontSize: 11 },
   legendRow: { flexDirection: 'row', gap: 16, justifyContent: 'center', marginTop: 8 },
+  legendList: { marginTop: 12, gap: 8 },
   legendItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   legendDot: { width: 10, height: 10, borderRadius: 5 },
   scorecard: { gap: 10 },

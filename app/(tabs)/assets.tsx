@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, SafeAreaView, Pressable } from 'react-native';
-import { Card, SectionTitle, useUi, Chip, Button, Input, Field, EmptyState, RiskBadge, StatusBadge, LifecycleActions } from '@/components/ui';
+import { Card, SectionTitle, useUi, Chip, Button, Input, Field, EmptyState, RiskBadge, StatusBadge } from '@/components/ui';
 import { DonutChart, ProgressBar } from '@/components/charts';
 import { Sheet } from '@/components/Sheet';
 import { useStore } from '@/lib/store';
@@ -9,6 +9,7 @@ import {
   totalInvestments,
   totalDebt,
   monthlyDebtPayments,
+  netWorth,
   actualAllocation,
   bandForAge,
   bandLabelForAge,
@@ -18,7 +19,6 @@ import {
   debtStrategies,
   totalContributed,
   monthlyContribution,
-  projectedContributionEntries,
   groupByPeriod,
   type PeriodMode,
 } from '@/lib/calc';
@@ -54,25 +54,74 @@ export default function AssetsScreen() {
 
 function AssetsTab() {
   const { data, palette, currency } = useUi();
-  const { addAsset, updateAsset, deleteAsset, setAssetStatus } = useStore();
+  const { addAsset, updateAsset, deleteAsset, addContribution, updateContribution } = useStore();
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editingAsset, setEditingAsset] = useState<Asset | null>(null);
   const [period, setPeriod] = useState<PeriodMode>('monthly');
-  const total = totalAssets(data.assets);
+  const assetsTotal = totalAssets(data.assets);
+  const investTotal = totalInvestments(data.investments);
+  const debtTotal = totalDebt(data.debts);
+  const nw = netWorth(data);
   const liquid = data.assets.filter((a) => a.status !== 'closed' && a.liquid).reduce((s, a) => s + a.value, 0);
+  const monthlyDebt = monthlyDebtPayments(data.debts);
+
+  const donutData = [
+    { label: 'Assets', value: assetsTotal, color: palette.chart[1] },
+    { label: 'Investments', value: investTotal, color: palette.chart[0] },
+    { label: 'Debts', value: debtTotal, color: palette.danger },
+  ].filter((d) => d.value > 0);
 
   const grouped = useMemo(() => groupByPeriod(data.assets, period), [data.assets, period]);
 
   return (
     <View style={{ gap: 14 }}>
       <Card style={styles.totalCard}>
-        <Text style={[styles.totalLabel, { color: palette.textMuted }]}>Total Assets</Text>
-        <Text style={[styles.totalValue, { color: palette.text }]}>{formatMoney(total, currency)}</Text>
+        <Text style={[styles.totalLabel, { color: palette.textMuted }]}>Net Worth (Assets + Investments − Debts)</Text>
+        <Text style={[styles.totalValue, { color: nw >= 0 ? palette.text : palette.danger }]}>{formatMoney(nw, currency)}</Text>
         <View style={styles.totalSub}>
+          <Text style={{ fontSize: 12, color: palette.textMuted }}>Assets: {formatMoney(assetsTotal, currency, { compact: true })}</Text>
+          <Text style={{ fontSize: 12, color: palette.chart[0] }}>Invested: {formatMoney(investTotal, currency, { compact: true })}</Text>
+          <Text style={{ fontSize: 12, color: palette.danger }}>Debt: {formatMoney(debtTotal, currency, { compact: true })}</Text>
+        </View>
+        <View style={[styles.totalSub, { marginTop: 4 }]}>
           <Text style={{ fontSize: 12, color: palette.textMuted }}>Liquid: {formatMoney(liquid, currency, { compact: true })}</Text>
-          <Text style={{ fontSize: 12, color: palette.textMuted }}>Illiquid: {formatMoney(total - liquid, currency, { compact: true })}</Text>
+          <Text style={{ fontSize: 12, color: palette.textMuted }}>Monthly EMI: {formatMoney(monthlyDebt, currency, { compact: true })}</Text>
         </View>
       </Card>
+
+      {donutData.length > 0 && (
+        <Card>
+          <SectionTitle title="Wealth Breakdown" />
+          <View style={styles.donutRow}>
+            <DonutChart size={140} thickness={26} data={donutData} />
+            <View style={{ justifyContent: 'center', gap: 10 }}>
+              {donutData.map((d) => (
+                <View key={d.label} style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: d.color }} />
+                  <View>
+                    <Text style={{ fontSize: 12, fontWeight: '600', color: palette.text }}>{d.label}</Text>
+                    <Text style={{ fontSize: 11, color: palette.textMuted }}>{formatMoney(d.value, currency, { compact: true })}</Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          </View>
+          <View style={[styles.totalSub, { marginTop: 12, justifyContent: 'space-between' }]}>
+            <View style={{ alignItems: 'center' }}>
+              <Text style={{ fontSize: 11, color: palette.textMuted }}>Monthly EMI</Text>
+              <Text style={{ fontSize: 13, fontWeight: '700', color: palette.danger }}>{formatMoney(monthlyDebt, currency, { compact: true })}</Text>
+            </View>
+            <View style={{ alignItems: 'center' }}>
+              <Text style={{ fontSize: 11, color: palette.textMuted }}>Annual EMI</Text>
+              <Text style={{ fontSize: 13, fontWeight: '700', color: palette.danger }}>{formatMoney(monthlyDebt * 12, currency, { compact: true })}</Text>
+            </View>
+            <View style={{ alignItems: 'center' }}>
+              <Text style={{ fontSize: 11, color: palette.textMuted }}>Net Worth</Text>
+              <Text style={{ fontSize: 13, fontWeight: '700', color: nw >= 0 ? palette.success : palette.danger }}>{formatMoney(nw, currency, { compact: true })}</Text>
+            </View>
+          </View>
+        </Card>
+      )}
 
       <View style={styles.tabRow}>
         <Chip label="Monthly" selected={period === 'monthly'} onPress={() => setPeriod('monthly')} />
@@ -100,13 +149,8 @@ function AssetsTab() {
                       <StatusBadge status={a.status} />
                     </View>
                     <Text style={{ fontSize: 11, color: palette.textMuted }}>{a.type} · {a.liquid ? 'Liquid' : 'Illiquid'}{a.closedDate ? ` · closed ${a.closedDate}` : ''}</Text>
-                    <LifecycleActions
-                      status={a.status}
-                      onPause={() => setAssetStatus(a.id, 'paused')}
-                      onResume={() => setAssetStatus(a.id, 'active')}
-                      onClose={() => setAssetStatus(a.id, 'closed')}
-                      onReopen={() => setAssetStatus(a.id, 'active')}
-                    />
+                    {(() => { const mo = monthlyContribution(data.contributions, a.id); return mo > 0 ? <Text style={{ fontSize: 11, color: palette.primary }}>{formatMoney(mo, currency, { compact: true })}/mo recurring</Text> : null; })()}
+
                   </View>
                   <Text style={{ fontSize: 14, fontWeight: '700', color: palette.text }}>{formatMoney(a.value, currency, { compact: true })}</Text>
                   <Pressable onPress={() => setEditingAsset(a)} hitSlop={8}>
@@ -122,13 +166,29 @@ function AssetsTab() {
         )}
       </Card>
 
-      <AssetSheet visible={sheetOpen} onClose={() => setSheetOpen(false)} onAdd={addAsset} />
+      <AssetSheet
+        visible={sheetOpen}
+        onClose={() => setSheetOpen(false)}
+        onAdd={(asset, contrib) => {
+          const id = addAsset(asset);
+          if (contrib) addContribution({ ...contrib, holdingId: id, holdingKind: 'asset' });
+        }}
+      />
       {editingAsset && (
         <AssetSheet
           visible={!!editingAsset}
           onClose={() => setEditingAsset(null)}
           initial={editingAsset}
-          onSave={(fields) => { updateAsset(editingAsset.id, fields); setEditingAsset(null); }}
+          existingContrib={data.contributions.find((c) => c.holdingId === editingAsset.id)}
+          onSave={(fields, contrib) => {
+            updateAsset(editingAsset.id, fields);
+            if (contrib) {
+              const existing = data.contributions.find((c) => c.holdingId === editingAsset.id);
+              if (existing) updateContribution(existing.id, contrib);
+              else addContribution({ ...contrib, holdingId: editingAsset.id, holdingKind: 'asset' });
+            }
+            setEditingAsset(null);
+          }}
         />
       )}
     </View>
@@ -136,25 +196,36 @@ function AssetsTab() {
 }
 
 function AssetSheet({
-  visible, onClose, onAdd, onSave, initial,
+  visible, onClose, onAdd, onSave, initial, existingContrib,
 }: {
   visible: boolean; onClose: () => void;
-  onAdd?: (a: Omit<Asset, 'id'>) => void;
-  onSave?: (a: Partial<Asset>) => void;
+  onAdd?: (a: Omit<Asset, 'id'>, contrib?: Omit<Contribution, 'id' | 'holdingId' | 'holdingKind'>) => void;
+  onSave?: (a: Partial<Asset>, contrib?: Partial<Contribution>) => void;
   initial?: Asset;
+  existingContrib?: Contribution;
 }) {
   const [name, setName] = useState(initial?.name ?? '');
   const [type, setType] = useState<AssetType>(initial?.type ?? 'cash');
   const [value, setValue] = useState(initial ? String(initial.value) : '');
   const [liquid, setLiquid] = useState(initial?.liquid ?? true);
   const [date, setDate] = useState(initial?.date ?? todayISO());
+  const [contribType, setContribType] = useState<ContributionType>(existingContrib?.type ?? 'onetime');
+  const [contribAmount, setContribAmount] = useState(existingContrib ? String(existingContrib.amount) : '');
+  const [freq, setFreq] = useState<ContributionFreq>(existingContrib?.freq ?? 'monthly');
 
   const submit = () => {
     const v = Number(value);
     if (!name.trim() || !v) return;
     const fields = { name: name.trim(), type, value: v, liquid: type === 'cash' || type === 'bank' ? true : liquid, date };
-    if (initial && onSave) { onSave(fields); }
-    else { onAdd?.({ ...fields, status: 'active' }); setName(''); setValue(''); setLiquid(true); setDate(todayISO()); onClose(); }
+    const amt = Number(contribAmount);
+    const contrib = amt ? { type: contribType, amount: amt, freq: contribType === 'recurring' ? freq : undefined, startDate: date, status: 'active' as const } : undefined;
+    if (initial && onSave) {
+      onSave(fields, contrib);
+    } else {
+      onAdd?.({ ...fields, status: 'active' }, contrib);
+      setName(''); setValue(''); setLiquid(true); setDate(todayISO()); setContribAmount(''); setContribType('onetime'); setFreq('monthly');
+      onClose();
+    }
   };
 
   return (
@@ -183,6 +254,21 @@ function AssetSheet({
           </View>
         </Field>
       )}
+      <Field label="Contribution Type">
+        <View style={styles.chipRow}>
+          <Chip label="One-time (Lumpsum)" selected={contribType === 'onetime'} onPress={() => setContribType('onetime')} />
+          <Chip label="Recurring (SIP)" selected={contribType === 'recurring'} onPress={() => setContribType('recurring')} />
+        </View>
+      </Field>
+      {contribType === 'recurring' && (
+        <Field label="Frequency">
+          <View style={styles.chipRow}>
+            {(['weekly', 'monthly', 'quarterly'] as ContributionFreq[]).map((f) => (
+              <Chip key={f} label={f} selected={freq === f} onPress={() => setFreq(f)} />
+            ))}
+          </View>
+        </Field>
+      )}
       <Button label={initial ? 'Save' : 'Add Asset'} onPress={submit} style={{ marginTop: 8 }} />
     </Sheet>
   );
@@ -190,11 +276,9 @@ function AssetSheet({
 
 function InvestmentsTab() {
   const { data, palette, currency } = useUi();
-  const { addInvestment, addInvestmentWithContribution, updateInvestment, deleteInvestment, setInvestmentStatus, addContribution, updateContribution, deleteContribution, setContributionStatus } = useStore();
+  const { addInvestment, addInvestmentWithContribution, updateInvestment, deleteInvestment, setInvestmentStatus, addContribution, updateContribution } = useStore();
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editingInvestment, setEditingInvestment] = useState<Investment | null>(null);
-  const [contribSheetFor, setContribSheetFor] = useState<Investment | null>(null);
-  const [detailFor, setDetailFor] = useState<Investment | null>(null);
   const [period, setPeriod] = useState<PeriodMode>('monthly');
   const today = todayISO();
   const total = totalInvestments(data.investments);
@@ -239,7 +323,6 @@ function InvestmentsTab() {
                 // CAGR is only meaningful for a single lump-sum; hide it when SIP contributions exist.
                 const contribs = data.contributions.filter((c) => c.holdingId === inv.id);
                 const cagrValue = contribs.length === 0 ? cagr(inv.purchaseValue, inv.currentValue, inv.purchaseDate, today) : null;
-                const isStale = inv.currentValue === inv.purchaseValue && contributed > inv.purchaseValue;
                 const monthly = monthlyContribution(data.contributions, inv.id);
                 return (
                   <View key={inv.id} style={styles.itemRow}>
@@ -252,32 +335,13 @@ function InvestmentsTab() {
                       <Text style={{ fontSize: 11, color: palette.textMuted }}>
                         {inv.type}{cagrValue !== null ? ` · CAGR ${formatPercent(cagrValue)}` : ' · CAGR N/A (SIP)'}{monthly > 0 ? ` · ${formatMoney(monthly, currency, { compact: true })}/mo SIP` : ''}
                       </Text>
-                      {isStale && (
-                        <Text style={{ fontSize: 11, color: palette.warning, marginTop: 2 }}>Current value not updated — tap to record market price</Text>
-                      )}
-                      {contribs.length > 0 && (
-                        <Pressable onPress={() => setDetailFor(inv)}>
-                          <Text style={{ fontSize: 11, color: palette.primary, fontWeight: '600', marginTop: 2 }}>{contribs.length} contribution(s) · {formatMoney(contributed, currency, { compact: true })} contributed</Text>
-                        </Pressable>
-                      )}
-                      <View style={styles.actionRow}>
-                        <LifecycleActions
-                          status={inv.status}
-                          onPause={() => setInvestmentStatus(inv.id, 'paused')}
-                          onResume={() => setInvestmentStatus(inv.id, 'active')}
-                          onClose={() => setInvestmentStatus(inv.id, 'closed')}
-                          onReopen={() => setInvestmentStatus(inv.id, 'active')}
-                        />
-                        <Pressable onPress={() => setContribSheetFor(inv)} style={[styles.contribBtn, { borderColor: palette.primary }]}>
-                          <Text style={{ fontSize: 11, fontWeight: '600', color: palette.primary }}>+ Contribution</Text>
-                        </Pressable>
-                      </View>
+
+
+
                     </View>
                     <View style={{ alignItems: 'flex-end' }}>
                       <Text style={{ fontSize: 14, fontWeight: '700', color: palette.text }}>{formatMoney(inv.currentValue, currency, { compact: true })}</Text>
-                      <Text style={{ fontSize: 11, color: gain >= 0 ? palette.success : palette.danger }}>
-                        {gain >= 0 ? '+' : ''}{formatMoney(gain, currency, { compact: true })}
-                      </Text>
+                      
                     </View>
                     <Pressable onPress={() => setEditingInvestment(inv)} hitSlop={8}>
                       <Pencil size={16} color={palette.primary} />
@@ -298,10 +362,16 @@ function InvestmentsTab() {
           visible={!!editingInvestment}
           onClose={() => setEditingInvestment(null)}
           investment={editingInvestment}
-          contributions={data.contributions.filter((c) => c.holdingId === editingInvestment.id)}
-          onSave={(fields) => { updateInvestment(editingInvestment.id, fields); setEditingInvestment(null); }}
-          onUpdateContribution={updateContribution}
-          onDeleteContribution={deleteContribution}
+          existingContrib={data.contributions.find((c) => c.holdingId === editingInvestment.id)}
+          onSave={(fields, contrib) => {
+            updateInvestment(editingInvestment.id, fields);
+            if (contrib) {
+              const existing = data.contributions.find((c) => c.holdingId === editingInvestment.id);
+              if (existing) updateContribution(existing.id, contrib);
+              else addContribution({ ...contrib, holdingId: editingInvestment.id, holdingKind: 'investment' });
+            }
+            setEditingInvestment(null);
+          }}
         />
       )}
 
@@ -314,57 +384,6 @@ function InvestmentsTab() {
         }}
       />
 
-      {contribSheetFor && (
-        <ContributionSheet
-          visible={!!contribSheetFor}
-          onClose={() => setContribSheetFor(null)}
-          holdingId={contribSheetFor.id}
-          holdingKind="investment"
-          holdingName={contribSheetFor.name}
-          contributions={data.contributions.filter((c) => c.holdingId === contribSheetFor.id)}
-          onAdd={addContribution}
-          onDelete={deleteContribution}
-          onSetStatus={setContributionStatus}
-        />
-      )}
-
-      {detailFor && (
-        <Sheet visible={!!detailFor} onClose={() => setDetailFor(null)} title={`Contributions — ${detailFor.name}`}>
-          <ContributionDetail holdingId={detailFor.id} />
-        </Sheet>
-      )}
-    </View>
-  );
-}
-
-function ContributionDetail({ holdingId }: { holdingId: string }) {
-  const { data, palette, currency } = useUi();
-  const contribs = data.contributions.filter((c) => c.holdingId === holdingId);
-  const today = todayISO();
-  if (contribs.length === 0) {
-    return <EmptyState title="No contributions yet" subtitle="Add a one-time lumpsum or a recurring SIP." />;
-  }
-  return (
-    <View style={{ gap: 12 }}>
-      {contribs.map((c) => {
-        const projected = c.type === 'recurring'
-          ? projectedContributionEntries(c, today).reduce((s, e) => s + e.amount, 0)
-          : c.amount;
-        return (
-          <View key={c.id} style={[styles.contribCard, { borderColor: palette.border, backgroundColor: palette.surfaceAlt }]}>
-            <View style={styles.nameRow}>
-              <Text style={{ fontSize: 13, fontWeight: '700', color: palette.text }}>{c.type === 'onetime' ? 'Lumpsum' : `SIP · ${c.freq || 'monthly'}`}</Text>
-              <StatusBadge status={c.status} />
-            </View>
-            <Text style={{ fontSize: 12, color: palette.textMuted }}>
-              {formatMoney(c.amount, currency)} · started {c.startDate}{c.pausedDate ? ` · paused ${c.pausedDate}` : ''}{c.closedDate ? ` · closed ${c.closedDate}` : ''}
-            </Text>
-            <Text style={{ fontSize: 12, color: palette.primary, fontWeight: '600', marginTop: 4 }}>
-              Total contributed: {formatMoney(projected, currency, { compact: true })}
-            </Text>
-          </View>
-        );
-      })}
     </View>
   );
 }
@@ -514,7 +533,7 @@ function InvestmentSheet({
 
 function DebtsTab() {
   const { data, palette, currency } = useUi();
-  const { addDebt, updateDebt, deleteDebt, setDebtStatus } = useStore();
+  const { addDebt, updateDebt, deleteDebt } = useStore();
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editingDebt, setEditingDebt] = useState<Debt | null>(null);
   const [period, setPeriod] = useState<PeriodMode>('monthly');
@@ -559,13 +578,7 @@ function DebtsTab() {
                         <StatusBadge status={d.status} />
                       </View>
                       <Text style={{ fontSize: 11, color: palette.textMuted }}>{d.type} · {d.interestRate}% · {d.status === 'closed' ? 'paid off' : months === Infinity ? 'EMI below interest' : `${months} mo left`}{d.closedDate ? ` · ${d.closedDate}` : ''}</Text>
-                      <LifecycleActions
-                        status={d.status}
-                        onPause={() => setDebtStatus(d.id, 'paused')}
-                        onResume={() => setDebtStatus(d.id, 'active')}
-                        onClose={() => setDebtStatus(d.id, 'closed')}
-                        onReopen={() => setDebtStatus(d.id, 'active')}
-                      />
+
                     </View>
                     <View style={{ alignItems: 'flex-end' }}>
                       <Text style={{ fontSize: 14, fontWeight: '700', color: palette.text }}>{formatMoney(d.outstanding, currency, { compact: true })}</Text>
@@ -689,28 +702,31 @@ function DebtSheet({
 }
 
 function InvestmentEditSheet({
-  visible, onClose, investment, contributions, onSave, onUpdateContribution, onDeleteContribution,
+  visible, onClose, investment, existingContrib, onSave,
 }: {
   visible: boolean;
   onClose: () => void;
   investment: Investment;
-  contributions: Contribution[];
-  onSave: (i: Partial<Investment>) => void;
-  onUpdateContribution: (id: string, c: Partial<Contribution>) => void;
-  onDeleteContribution: (id: string) => void;
+  existingContrib?: Contribution;
+  onSave: (i: Partial<Investment>, contrib?: Partial<Contribution>) => void;
 }) {
-  const { palette, currency } = useUi();
+  const { palette } = useUi();
   const [name, setName] = useState(investment.name);
   const [type, setType] = useState<InvestmentType>(investment.type);
   const [currentValue, setCurrentValue] = useState(String(investment.currentValue));
   const [purchaseValue, setPurchaseValue] = useState(String(investment.purchaseValue));
   const [purchaseDate, setPurchaseDate] = useState(investment.purchaseDate);
+  const [contribType, setContribType] = useState<ContributionType>(existingContrib?.type ?? 'onetime');
+  const [contribAmount, setContribAmount] = useState(existingContrib ? String(existingContrib.amount) : '');
+  const [freq, setFreq] = useState<ContributionFreq>(existingContrib?.freq ?? 'monthly');
 
   const submit = () => {
     const cv = Number(currentValue);
     const pv = Number(purchaseValue);
     if (!name.trim() || !cv) return;
-    onSave({ name: name.trim(), type, currentValue: cv, purchaseValue: pv, purchaseDate });
+    const amt = Number(contribAmount);
+    const contrib = amt ? { type: contribType, amount: amt, freq: contribType === 'recurring' ? freq : undefined, startDate: purchaseDate, status: 'active' as const } : undefined;
+    onSave({ name: name.trim(), type, currentValue: cv, purchaseValue: pv, purchaseDate }, contrib);
   };
 
   return (
@@ -734,91 +750,26 @@ function InvestmentEditSheet({
       <Field label="Purchase Date">
         <Input value={purchaseDate} onChangeText={setPurchaseDate} placeholder="YYYY-MM-DD" />
       </Field>
+      <Field label="Contribution Type">
+        <View style={styles.chipRow}>
+          <Chip label="One-time (Lumpsum)" selected={contribType === 'onetime'} onPress={() => setContribType('onetime')} />
+          <Chip label="Recurring (SIP)" selected={contribType === 'recurring'} onPress={() => setContribType('recurring')} />
+        </View>
+      </Field>
+      <Field label={contribType === 'onetime' ? 'Contribution Amount (optional)' : 'Recurring Amount'}>
+        <Input value={contribAmount} onChangeText={(t) => setContribAmount(t.replace(/[^0-9.]/g, ''))} keyboardType="numeric" placeholder="0" />
+      </Field>
+      {contribType === 'recurring' && (
+        <Field label="Frequency">
+          <View style={styles.chipRow}>
+            {(['weekly', 'monthly', 'quarterly'] as ContributionFreq[]).map((f) => (
+              <Chip key={f} label={f} selected={freq === f} onPress={() => setFreq(f)} />
+            ))}
+          </View>
+        </Field>
+      )}
       <Button label="Save" onPress={submit} style={{ marginTop: 8 }} />
-
-      {contributions.length > 0 && (
-        <>
-          <Text style={[styles.contribListTitle, { color: palette.textMuted }]}>Contributions</Text>
-          {contributions.map((c) => (
-            <ContribEditRow
-              key={c.id}
-              contribution={c}
-              currency={currency}
-              onUpdate={(patch) => onUpdateContribution(c.id, patch)}
-              onDelete={() => onDeleteContribution(c.id)}
-            />
-          ))}
-        </>
-      )}
     </Sheet>
-  );
-}
-
-function ContribEditRow({
-  contribution, currency, onUpdate, onDelete,
-}: {
-  contribution: Contribution;
-  currency: any;
-  onUpdate: (patch: Partial<Contribution>) => void;
-  onDelete: () => void;
-}) {
-  const { palette } = useUi();
-  const [type, setType] = useState<ContributionType>(contribution.type);
-  const [amount, setAmount] = useState(String(contribution.amount));
-  const [freq, setFreq] = useState<ContributionFreq>(contribution.freq ?? 'monthly');
-  const [startDate, setStartDate] = useState(contribution.startDate);
-  const [expanded, setExpanded] = useState(false);
-
-  const save = () => {
-    const amt = Number(amount);
-    if (!amt) return;
-    onUpdate({ type, amount: amt, freq: type === 'recurring' ? freq : undefined, startDate });
-    setExpanded(false);
-  };
-
-  return (
-    <View style={[styles.contribCard, { borderColor: palette.border, backgroundColor: palette.surfaceAlt, marginBottom: 8 }]}>
-      <Pressable onPress={() => setExpanded((e) => !e)} style={styles.nameRow}>
-        <View style={{ flex: 1 }}>
-          <Text style={{ fontSize: 13, fontWeight: '700', color: palette.text }}>
-            {contribution.type === 'onetime' ? 'Lumpsum' : `SIP · ${contribution.freq || 'monthly'}`}
-          </Text>
-          <Text style={{ fontSize: 11, color: palette.textMuted }}>
-            {formatMoney(contribution.amount, currency)} · from {contribution.startDate}
-          </Text>
-        </View>
-        <Text style={{ fontSize: 12, color: palette.primary, fontWeight: '600' }}>{expanded ? 'Cancel' : 'Edit'}</Text>
-        <Pressable onPress={onDelete} hitSlop={8}>
-          <Trash2 size={15} color={palette.danger} />
-        </Pressable>
-      </Pressable>
-      {expanded && (
-        <View style={{ gap: 10, marginTop: 10 }}>
-          <Field label="Type">
-            <View style={styles.chipRow}>
-              <Chip label="One-time / Lumpsum" selected={type === 'onetime'} onPress={() => setType('onetime')} />
-              <Chip label="Recurring (SIP)" selected={type === 'recurring'} onPress={() => setType('recurring')} />
-            </View>
-          </Field>
-          <Field label="Amount">
-            <Input value={amount} onChangeText={(t) => setAmount(t.replace(/[^0-9.]/g, ''))} keyboardType="numeric" placeholder="0" />
-          </Field>
-          {type === 'recurring' && (
-            <Field label="Frequency">
-              <View style={styles.chipRow}>
-                {(['weekly', 'monthly', 'quarterly'] as ContributionFreq[]).map((f) => (
-                  <Chip key={f} label={f} selected={freq === f} onPress={() => setFreq(f)} />
-                ))}
-              </View>
-            </Field>
-          )}
-          <Field label="Start Date">
-            <Input value={startDate} onChangeText={setStartDate} placeholder="YYYY-MM-DD" />
-          </Field>
-          <Button label="Update" onPress={save} />
-        </View>
-      )}
-    </View>
   );
 }
 
@@ -912,100 +863,6 @@ function AllocationTab() {
   );
 }
 
-/** Shared contribution sheet for investments (and assets/debts). */
-function ContributionSheet({
-  visible,
-  onClose,
-  holdingId,
-  holdingKind,
-  holdingName,
-  contributions,
-  onAdd,
-  onDelete,
-  onSetStatus,
-}: {
-  visible: boolean;
-  onClose: () => void;
-  holdingId: string;
-  holdingKind: 'investment' | 'asset' | 'debt';
-  holdingName: string;
-  contributions: Contribution[];
-  onAdd: (c: Omit<Contribution, 'id'>) => void;
-  onDelete: (id: string) => void;
-  onSetStatus: (id: string, status: 'active' | 'paused' | 'closed', date?: string) => void;
-}) {
-  const { palette, currency } = useUi();
-  const [type, setType] = useState<ContributionType>('onetime');
-  const [amount, setAmount] = useState('');
-  const [freq, setFreq] = useState<ContributionFreq>('monthly');
-  const [startDate, setStartDate] = useState(todayISO());
-
-  const submit = () => {
-    const amt = Number(amount);
-    if (!amt) return;
-    onAdd({ holdingKind, holdingId, type, amount: amt, freq: type === 'recurring' ? freq : undefined, startDate, status: 'active' });
-    setAmount(''); setType('onetime'); setFreq('monthly'); setStartDate(todayISO());
-  };
-
-  return (
-    <Sheet visible={visible} onClose={onClose} title={`Contributions — ${holdingName}`}>
-      <Field label="Type">
-        <View style={styles.chipRow}>
-          <Chip label="One-time / Lumpsum" selected={type === 'onetime'} onPress={() => setType('onetime')} />
-          <Chip label="Recurring (SIP)" selected={type === 'recurring'} onPress={() => setType('recurring')} />
-        </View>
-      </Field>
-      <Field label="Amount">
-        <Input value={amount} onChangeText={(t) => setAmount(t.replace(/[^0-9.]/g, ''))} keyboardType="numeric" placeholder="0" />
-      </Field>
-      {type === 'recurring' && (
-        <Field label="Frequency">
-          <View style={styles.chipRow}>
-            {(['weekly', 'monthly', 'quarterly'] as ContributionFreq[]).map((f) => (
-              <Chip key={f} label={f} selected={freq === f} onPress={() => setFreq(f)} />
-            ))}
-          </View>
-        </Field>
-      )}
-      <Field label="Start Date">
-        <Input value={startDate} onChangeText={setStartDate} placeholder="YYYY-MM-DD" />
-      </Field>
-      <Button label="Add Contribution" onPress={submit} style={{ marginTop: 8 }} />
-
-      <Text style={[styles.contribListTitle, { color: palette.textMuted }]}>Existing Contributions</Text>
-      {contributions.length === 0 ? (
-        <Text style={{ fontSize: 12, color: palette.textMuted }}>None yet.</Text>
-      ) : (
-        contributions.map((c) => (
-          <View key={c.id} style={[styles.contribRow, { borderBottomColor: palette.border }]}>
-            <View style={{ flex: 1 }}>
-              <View style={styles.nameRow}>
-                <Text style={{ fontSize: 13, fontWeight: '600', color: palette.text }}>
-                  {c.type === 'onetime' ? 'Lumpsum' : `SIP · ${c.freq || 'monthly'}`}
-                </Text>
-                <StatusBadge status={c.status} />
-              </View>
-              <Text style={{ fontSize: 11, color: palette.textMuted }}>
-                {formatMoney(c.amount, currency)} · from {c.startDate}
-              </Text>
-              <LifecycleActions
-                status={c.status}
-                onPause={() => onSetStatus(c.id, 'paused')}
-                onResume={() => onSetStatus(c.id, 'active')}
-                onClose={() => onSetStatus(c.id, 'closed')}
-                onReopen={() => onSetStatus(c.id, 'active')}
-              />
-            </View>
-            <Pressable onPress={() => onDelete(c.id)} hitSlop={8}>
-              <Trash2 size={16} color={palette.danger} />
-            </Pressable>
-          </View>
-        ))
-      )}
-    </Sheet>
-  );
-}
-
 function assetTypeIndex(t: AssetType): number {
   return { cash: 0, bank: 1, realestate: 2, gold: 3, other: 4 }[t] ?? 0;
 }
@@ -1028,15 +885,11 @@ const styles = StyleSheet.create({
   typeDot: { width: 10, height: 10, borderRadius: 5, marginTop: 4 },
   nameRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   actionRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4, flexWrap: 'wrap' },
-  contribBtn: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8, borderWidth: 1 },
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   twoCol: { flexDirection: 'row', gap: 12 },
   donutRow: { flexDirection: 'row', justifyContent: 'space-around', gap: 12 },
   driftRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, gap: 8 },
   strategyRow: { flexDirection: 'row', gap: 12 },
-  contribListTitle: { fontSize: 13, fontWeight: '600', marginTop: 20, marginBottom: 8 },
-  contribRow: { flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 8, gap: 8, borderBottomWidth: StyleSheet.hairlineWidth },
-  contribCard: { borderRadius: 12, borderWidth: 1, padding: 12 },
   stepIndicator: { flexDirection: 'row', justifyContent: 'space-between', paddingBottom: 12, marginBottom: 4, borderBottomWidth: StyleSheet.hairlineWidth },
   stepDotWrap: { flexDirection: 'row', alignItems: 'center' },
   stepDot: { width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
