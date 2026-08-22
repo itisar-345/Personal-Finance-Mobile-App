@@ -134,7 +134,10 @@ export default function TransactionsScreen() {
         {/* Recurring transactions */}
         {recurring.length > 0 && (
           <Card>
-            <SectionTitle title="Recurring" action={<Repeat size={16} color={palette.textMuted} />} />
+            <SectionTitle title="Recurring (label only)" action={<Repeat size={16} color={palette.textMuted} />} />
+            <Text style={{ fontSize: 11, color: palette.textMuted, marginBottom: 8 }}>
+              These are reminders only — amounts are not projected into future months automatically.
+            </Text>
             {recurring.map((t) => (
               <View key={t.id} style={styles.recurRow}>
                 <View style={{ flex: 1 }}>
@@ -268,7 +271,7 @@ function TransactionSheet({
       <Field label="Date">
         <Input value={date} onChangeText={setDate} placeholder="YYYY-MM-DD" />
       </Field>
-      <Field label="Recurring">
+      <Field label="Recurring (label only — not auto-projected)">
         <View style={styles.typeToggle}>
           <Chip label="One-time" selected={recurring === 'none'} onPress={() => setRecurring('none')} />
           <Chip label="Monthly" selected={recurring === 'monthly'} onPress={() => setRecurring('monthly')} />
@@ -334,7 +337,7 @@ function EditTransactionSheet({
       <Field label="Date">
         <Input value={date} onChangeText={setDate} placeholder="YYYY-MM-DD" />
       </Field>
-      <Field label="Recurring">
+      <Field label="Recurring (label only — not auto-projected)">
         <View style={styles.typeToggle}>
           <Chip label="One-time" selected={recurring === 'none'} onPress={() => setRecurring('none')} />
           <Chip label="Monthly" selected={recurring === 'monthly'} onPress={() => setRecurring('monthly')} />

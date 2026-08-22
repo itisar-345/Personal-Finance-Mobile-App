@@ -55,10 +55,3 @@ export function useTheme(settings: Settings): Palette {
   if (settings.theme === 'light') return LIGHT;
   return scheme === 'dark' ? DARK : LIGHT;
 }
-
-export function getPalette(settings: Settings): Palette {
-  const scheme = useColorScheme();
-  if (settings.theme === 'dark') return DARK;
-  if (settings.theme === 'light') return LIGHT;
-  return scheme === 'dark' ? DARK : LIGHT;
-}

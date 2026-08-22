@@ -24,13 +24,28 @@ export async function readData<T>(): Promise<T | null> {
   }
 }
 
-export async function writeData<T>(data: T): Promise<void> {
+let pending: unknown = undefined;
+let writing = false;
+
+async function flush(): Promise<void> {
+  if (writing || pending === undefined) return;
+  writing = true;
+  const snapshot = pending;
+  pending = undefined;
   try {
     await ensureDir();
-    await FileSystem.writeAsStringAsync(FILE, JSON.stringify(data), {
+    await FileSystem.writeAsStringAsync(FILE, JSON.stringify(snapshot), {
       encoding: FileSystem.EncodingType.UTF8,
     });
   } catch {
     // ignore write errors
+  } finally {
+    writing = false;
+    if (pending !== undefined) flush();
   }
+}
+
+export function writeData<T>(data: T): void {
+  pending = data;
+  flush();
 }

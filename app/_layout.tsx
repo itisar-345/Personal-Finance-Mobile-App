@@ -1,17 +1,32 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { View, ActivityIndicator, StyleSheet } from 'react-native';
+import { AppState, View, ActivityIndicator, StyleSheet } from 'react-native';
 import { useFrameworkReady } from '@/hooks/useFrameworkReady';
 import { StoreProvider, useStore } from '@/lib/store';
 import { useTheme } from '@/lib/theme';
 import { Onboarding } from '@/components/Onboarding';
 import { PinLock } from '@/components/PinLock';
+import { scheduleRecurringNotifications } from '@/lib/notifications';
 
 function Gate({ children }: { children: React.ReactNode }) {
   const { data, ready } = useStore();
   const palette = useTheme(data.settings);
   const [unlocked, setUnlocked] = useState(false);
+  const appState = useRef(AppState.currentState);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      if (appState.current === 'active' && next.match(/inactive|background/)) {
+        if (data.settings.pin) setUnlocked(false);
+      }
+      if (next === 'active' && data.settings.reminderEnabled) {
+        scheduleRecurringNotifications(data);
+      }
+      appState.current = next;
+    });
+    return () => sub.remove();
+  }, [data.settings.pin, data.settings.reminderEnabled, data]);
 
   if (!ready) {
     return (

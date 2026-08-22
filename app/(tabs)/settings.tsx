@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { View, Text, StyleSheet, ScrollView, SafeAreaView, Pressable, Share, Platform } from 'react-native';
+import { requestNotificationPermission, scheduleRecurringNotifications, cancelAllNotifications } from '@/lib/notifications';
 import { Card, SectionTitle, useUi, Chip, Button, Input, Field, StatusBadge, LifecycleActions } from '@/components/ui';
 import { Sheet } from '@/components/Sheet';
 import { useStore } from '@/lib/store';
@@ -53,11 +54,13 @@ export default function SettingsScreen() {
     updateSettings({ lastBackupDate: today });
   };
 
+  const csvEscape = (s: string) => `"${s.replace(/"/g, '""')}"`;
+
   const doExportCsv = () => {
     const rows = ['date,type,amount,category,note,recurring'];
     for (const t of data.transactions) {
       const cat = data.categories.find((c) => c.id === t.categoryId)?.name || '';
-      rows.push(`${t.date},${t.type},${t.amount},"${cat}","${t.note || ''}",${t.recurring}`);
+      rows.push(`${t.date},${t.type},${t.amount},${csvEscape(cat)},${csvEscape(t.note || '')},${t.recurring}`);
     }
     const csv = rows.join('\n');
     if (Platform.OS === 'web') {
@@ -89,16 +92,16 @@ export default function SettingsScreen() {
 
   const toggleReminders = async () => {
     if (!settings.reminderEnabled) {
-      if (Platform.OS === 'web' && typeof window !== 'undefined' && 'Notification' in window) {
-        const perm = await Notification.requestPermission();
-        if (perm !== 'granted') {
-          setReminderStatus('Permission denied. You can enable notifications in your browser settings later.');
-          return;
-        }
+      const granted = await requestNotificationPermission();
+      if (!granted) {
+        setReminderStatus('Permission denied. Enable notifications for FinTrack in your device settings.');
+        return;
       }
+      await scheduleRecurringNotifications(data);
       setReminderStatus(null);
       updateSettings({ reminderEnabled: true });
     } else {
+      await cancelAllNotifications();
       updateSettings({ reminderEnabled: false });
       setReminderStatus(null);
     }
@@ -176,7 +179,7 @@ export default function SettingsScreen() {
             <Text style={{ fontSize: 11, color: palette.danger, marginTop: 4 }}>{reminderStatus}</Text>
           )}
           <Text style={{ fontSize: 11, color: palette.textMuted, marginTop: 4 }}>
-            Get a daily notification when recurring payments — SIPs, EMIs, subscriptions, salary credits — are due. No internet needed; notifications are generated locally.
+            Get a notification on the due date of each recurring payment — SIPs, EMIs, subscriptions, salary credits. No internet needed.
           </Text>
           {settings.reminderEnabled && recurringCount > 0 && (
             <Pressable
@@ -377,12 +380,23 @@ function RateSheet({ visible, onClose }: { visible: boolean; onClose: () => void
     Object.fromEntries(data.settings.currencies.map((c) => [c.code, String(c.rate)])),
   );
 
+  const [rateError, setRateError] = useState<string | null>(null);
+
   const save = () => {
+    for (const c of data.settings.currencies) {
+      const v = rates[c.code];
+      if (v === '' || v === undefined) continue;
+      if (isNaN(Number(v)) || Number(v) < 0) {
+        setRateError(`Invalid rate for ${c.code}.`);
+        return;
+      }
+    }
     const updated: Currency[] = data.settings.currencies.map((c) => ({
       ...c,
-      rate: Number(rates[c.code]) || c.rate,
+      rate: rates[c.code] !== '' && rates[c.code] !== undefined ? Number(rates[c.code]) : c.rate,
     }));
     updateSettings({ currencies: updated });
+    setRateError(null);
     onClose();
   };
 
@@ -401,6 +415,7 @@ function RateSheet({ visible, onClose }: { visible: boolean; onClose: () => void
           />
         </Field>
       ))}
+      {rateError && <Text style={{ fontSize: 12, color: palette.danger, marginBottom: 4 }}>{rateError}</Text>}
       <Button label="Save Rates" onPress={save} style={{ marginTop: 8 }} />
     </Sheet>
   );
@@ -428,33 +443,30 @@ function ImportJsonSheet({
     }
   };
 
-  const handleFile = (file: File) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const content = String(reader.result || '');
-      setText(content);
-      setResult(null);
-    };
-    reader.readAsText(file);
-  };
-
   return (
     <Sheet visible={visible} onClose={onClose} title="Import Backup (JSON)">
       <Text style={{ fontSize: 13, color: palette.textMuted, marginBottom: 8 }}>
-        Paste a JSON backup below, or upload a .json backup file. This will replace all current data.
+        {Platform.OS === 'web'
+          ? 'Paste a JSON backup below, or upload a .json backup file. This will replace all current data.'
+          : 'Paste a JSON backup below. This will replace all current data.'}
       </Text>
-      <Field label="Upload .json file">
-        <input
-          type="file"
-          accept=".json,application/json"
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) handleFile(f);
-          }}
-          style={{ fontSize: 13, color: palette.text }}
-        />
-      </Field>
-      <Field label="Or paste JSON text">
+      {Platform.OS === 'web' && (
+        <Field label="Upload .json file">
+          <input
+            type="file"
+            accept=".json,application/json"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (!f) return;
+              const reader = new FileReader();
+              reader.onload = () => { setText(String(reader.result || '')); setResult(null); };
+              reader.readAsText(f);
+            }}
+            style={{ fontSize: 13, color: palette.text }}
+          />
+        </Field>
+      )}
+      <Field label={Platform.OS === 'web' ? 'Or paste JSON text' : 'Paste JSON text'}>
         <Input
           value={text}
           onChangeText={setText}
@@ -704,7 +716,7 @@ function AboutSheet({ visible, onClose }: { visible: boolean; onClose: () => voi
     },
     {
       q: 'Do reminders work offline?',
-      a: 'Yes. Reminders use your device\'s local notification system. No internet connection is needed — they fire based on the clock on your device.',
+      a: 'Yes. Reminders use your device\'s local notification system via expo-notifications. No internet connection is needed — they fire based on the clock on your device.',
     },
     {
       q: 'Is my data shared with anyone?',

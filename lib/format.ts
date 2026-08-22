@@ -8,13 +8,20 @@ export function getCurrency(currencies: Currency[], code: string): Currency {
 export function formatMoney(amountInBase: number, currency: Currency, opts?: { compact?: boolean }): string {
   const converted = amountInBase * currency.rate;
   const abs = Math.abs(converted);
+  const isINR = currency.code === 'INR';
   let str: string;
-  if (opts?.compact && abs >= 1_000_000) {
-    str = `${(converted / 1_000_000).toFixed(2)}M`;
-  } else if (opts?.compact && abs >= 100_000) {
-    str = `${(converted / 100_000).toFixed(1)}L`;
-  } else if (opts?.compact && abs >= 1_000) {
-    str = `${(converted / 1_000).toFixed(1)}K`;
+  if (opts?.compact) {
+    if (isINR) {
+      if (abs >= 10_000_000) str = `${(converted / 10_000_000).toFixed(2)}Cr`;
+      else if (abs >= 100_000) str = `${(converted / 100_000).toFixed(1)}L`;
+      else if (abs >= 1_000) str = `${(converted / 1_000).toFixed(1)}K`;
+      else str = converted.toLocaleString(undefined, { maximumFractionDigits: 0 });
+    } else {
+      if (abs >= 1_000_000_000) str = `${(converted / 1_000_000_000).toFixed(2)}B`;
+      else if (abs >= 1_000_000) str = `${(converted / 1_000_000).toFixed(2)}M`;
+      else if (abs >= 1_000) str = `${(converted / 1_000).toFixed(1)}K`;
+      else str = converted.toLocaleString(undefined, { maximumFractionDigits: 0 });
+    }
   } else {
     str = converted.toLocaleString(undefined, { maximumFractionDigits: 0 });
   }

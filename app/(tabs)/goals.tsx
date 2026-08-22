@@ -49,6 +49,7 @@ function GoalsTab() {
   const { addGoal, updateGoal, deleteGoal } = useStore();
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editingGoal, setEditingGoal] = useState<Goal | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<Goal | null>(null);
 
   return (
     <View style={{ gap: 14 }}>
@@ -64,7 +65,8 @@ function GoalsTab() {
           data.goals.map((g) => {
             const progress = goalProgress(g.currentAmount, g.targetAmount);
             const months = monthsUntil(g.targetDate);
-            const required = requiredMonthlyForGoal(g.targetAmount, g.currentAmount, months, data.settings.expectedReturn || 10);
+            const isOverdue = months === 0 && progress < 1;
+            const required = (!isOverdue && months > 0) ? requiredMonthlyForGoal(g.targetAmount, g.currentAmount, months, data.settings.expectedReturn || 10) : null;
             return (
               <View key={g.id} style={[styles.goalCard, { borderBottomColor: palette.border }]}>
                 <View style={styles.goalHeader}>
@@ -75,7 +77,7 @@ function GoalsTab() {
                   <Pressable onPress={() => setEditingGoal(g)} hitSlop={8}>
                     <Pencil size={16} color={palette.primary} />
                   </Pressable>
-                  <Pressable onPress={() => deleteGoal(g.id)} hitSlop={8}>
+                  <Pressable onPress={() => setPendingDelete(g)} hitSlop={8}>
                     <Trash2 size={16} color={palette.danger} />
                   </Pressable>
                 </View>
@@ -86,8 +88,12 @@ function GoalsTab() {
                   </Text>
                   <Text style={{ fontSize: 12, fontWeight: '700', color: palette.primary }}>{formatPercent(progress)}</Text>
                 </View>
-                <Text style={{ fontSize: 11, color: palette.textMuted, marginTop: 4 }}>
-                  Need {formatMoney(required, currency, { compact: true })}/mo to hit target
+                <Text style={{ fontSize: 11, color: isOverdue ? palette.danger : palette.textMuted, marginTop: 4 }}>
+                  {isOverdue
+                    ? 'Overdue — target date has passed'
+                    : required !== null
+                    ? `Need ${formatMoney(required, currency, { compact: true })}/mo to hit target`
+                    : 'Goal reached!'}
                 </Text>
               </View>
             );
@@ -102,6 +108,13 @@ function GoalsTab() {
           onClose={() => setEditingGoal(null)}
           initial={editingGoal}
           onSave={(fields) => { updateGoal(editingGoal.id, fields); setEditingGoal(null); }}
+        />
+      )}
+      {pendingDelete && (
+        <DeleteConfirmSheet
+          name={pendingDelete.name}
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={() => { deleteGoal(pendingDelete.id); setPendingDelete(null); }}
         />
       )}
     </View>
@@ -337,6 +350,21 @@ function DebtPlannerTab() {
         })}
       </Card>
     </View>
+  );
+}
+
+function DeleteConfirmSheet({ name, onCancel, onConfirm }: { name: string; onCancel: () => void; onConfirm: () => void }) {
+  const { palette } = useUi();
+  return (
+    <Sheet visible onClose={onCancel} title="Delete?">
+      <Text style={{ fontSize: 13, color: palette.textMuted, marginBottom: 16 }}>
+        Delete "{name}"? This cannot be undone.
+      </Text>
+      <View style={{ flexDirection: 'row', gap: 12 }}>
+        <Button label="Cancel" variant="outline" onPress={onCancel} style={{ flex: 1 }} />
+        <Button label="Delete" variant="danger" onPress={onConfirm} style={{ flex: 1 }} />
+      </View>
+    </Sheet>
   );
 }
 

@@ -57,6 +57,7 @@ function AssetsTab() {
   const { addAsset, updateAsset, deleteAsset, addContribution, updateContribution } = useStore();
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editingAsset, setEditingAsset] = useState<Asset | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<Asset | null>(null);
   const [period, setPeriod] = useState<PeriodMode>('monthly');
   const assetsTotal = totalAssets(data.assets);
   const investTotal = totalInvestments(data.investments);
@@ -156,7 +157,7 @@ function AssetsTab() {
                   <Pressable onPress={() => setEditingAsset(a)} hitSlop={8}>
                     <Pencil size={16} color={palette.primary} />
                   </Pressable>
-                  <Pressable onPress={() => deleteAsset(a.id)} hitSlop={8}>
+                  <Pressable onPress={() => setPendingDelete(a)} hitSlop={8}>
                     <Trash2 size={16} color={palette.danger} />
                   </Pressable>
                 </View>
@@ -165,6 +166,14 @@ function AssetsTab() {
           ))
         )}
       </Card>
+
+      {pendingDelete && (
+        <DeleteConfirmSheet
+          name={pendingDelete.name}
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={() => { deleteAsset(pendingDelete.id); setPendingDelete(null); }}
+        />
+      )}
 
       <AssetSheet
         visible={sheetOpen}
@@ -279,13 +288,17 @@ function InvestmentsTab() {
   const { addInvestment, addInvestmentWithContribution, updateInvestment, deleteInvestment, setInvestmentStatus, addContribution, updateContribution } = useStore();
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editingInvestment, setEditingInvestment] = useState<Investment | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<Investment | null>(null);
   const [period, setPeriod] = useState<PeriodMode>('monthly');
   const today = todayISO();
   const total = totalInvestments(data.investments);
   const contributedTotal = data.investments
     .filter((i) => i.status !== 'closed')
-    .reduce((sum, inv) => sum + totalContributed(data.contributions, inv.id, today), 0);
-  const gain = total - contributedTotal;
+    .reduce((sum, inv) => {
+      const c = totalContributed(data.contributions, inv.id, today);
+      return sum + (c > 0 ? c : inv.purchaseValue);
+    }, 0);
+  const gain = contributedTotal > 0 ? total - contributedTotal : 0;
 
   const grouped = useMemo(() => groupByPeriod(data.investments, period), [data.investments, period]);
 
@@ -346,7 +359,7 @@ function InvestmentsTab() {
                     <Pressable onPress={() => setEditingInvestment(inv)} hitSlop={8}>
                       <Pencil size={16} color={palette.primary} />
                     </Pressable>
-                    <Pressable onPress={() => deleteInvestment(inv.id)} hitSlop={8}>
+                    <Pressable onPress={() => setPendingDelete(inv)} hitSlop={8}>
                       <Trash2 size={16} color={palette.danger} />
                     </Pressable>
                   </View>
@@ -384,6 +397,13 @@ function InvestmentsTab() {
         }}
       />
 
+      {pendingDelete && (
+        <DeleteConfirmSheet
+          name={pendingDelete.name}
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={() => { deleteInvestment(pendingDelete.id); setPendingDelete(null); }}
+        />
+      )}
     </View>
   );
 }
@@ -533,9 +553,10 @@ function InvestmentSheet({
 
 function DebtsTab() {
   const { data, palette, currency } = useUi();
-  const { addDebt, updateDebt, deleteDebt } = useStore();
+  const { addDebt, updateDebt, deleteDebt, addContribution } = useStore();
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editingDebt, setEditingDebt] = useState<Debt | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<Debt | null>(null);
   const [period, setPeriod] = useState<PeriodMode>('monthly');
   const total = totalDebt(data.debts);
   const monthly = monthlyDebtPayments(data.debts);
@@ -587,7 +608,7 @@ function DebtsTab() {
                     <Pressable onPress={() => setEditingDebt(d)} hitSlop={8}>
                       <Pencil size={16} color={palette.primary} />
                     </Pressable>
-                    <Pressable onPress={() => deleteDebt(d.id)} hitSlop={8}>
+                    <Pressable onPress={() => setPendingDelete(d)} hitSlop={8}>
                       <Trash2 size={16} color={palette.danger} />
                     </Pressable>
                   </View>
@@ -600,13 +621,29 @@ function DebtsTab() {
 
       {data.debts.length > 0 && <DebtStrategyCard />}
 
-      <DebtSheet visible={sheetOpen} onClose={() => setSheetOpen(false)} onAdd={addDebt} />
+      <DebtSheet
+        visible={sheetOpen}
+        onClose={() => setSheetOpen(false)}
+        onAdd={(debt) => {
+          const id = addDebt(debt);
+          if (debt.emi > 0) {
+            addContribution({ holdingId: id, holdingKind: 'debt', type: 'recurring', amount: debt.emi, freq: 'monthly', startDate: debt.date, status: 'active' });
+          }
+        }}
+      />
       {editingDebt && (
         <DebtSheet
           visible={!!editingDebt}
           onClose={() => setEditingDebt(null)}
           initial={editingDebt}
           onSave={(fields) => { updateDebt(editingDebt.id, fields); setEditingDebt(null); }}
+        />
+      )}
+      {pendingDelete && (
+        <DeleteConfirmSheet
+          name={pendingDelete.name}
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={() => { deleteDebt(pendingDelete.id); setPendingDelete(null); }}
         />
       )}
     </View>
@@ -860,6 +897,21 @@ function AllocationTab() {
         <EmptyState title="Set your age first" subtitle="Go to Settings to set your age, which determines your target allocation band." />
       )}
     </View>
+  );
+}
+
+function DeleteConfirmSheet({ name, onCancel, onConfirm }: { name: string; onCancel: () => void; onConfirm: () => void }) {
+  const { palette } = useUi();
+  return (
+    <Sheet visible onClose={onCancel} title="Delete?">
+      <Text style={{ fontSize: 13, color: palette.textMuted, marginBottom: 16 }}>
+        Delete "{name}"? This cannot be undone.
+      </Text>
+      <View style={{ flexDirection: 'row', gap: 12 }}>
+        <Button label="Cancel" variant="outline" onPress={onCancel} style={{ flex: 1 }} />
+        <Button label="Delete" variant="danger" onPress={onConfirm} style={{ flex: 1 }} />
+      </View>
+    </Sheet>
   );
 }
 

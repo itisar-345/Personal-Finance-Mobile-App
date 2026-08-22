@@ -89,10 +89,16 @@ export function Onboarding() {
                 </View>
               </View>
             ) : null}
+            {error ? <Text style={[styles.error, { color: palette.danger }]}>{error}</Text> : null}
             <View style={styles.row}>
               <Button label="Back" variant="outline" onPress={() => setStep(0)} />
               <View style={{ width: 12 }} />
-              <Button label="Next" onPress={() => setStep(2)} />
+              <Button label="Next" onPress={() => {
+                const n = Number(age);
+                if (!n || n < 18) { setError('Please enter a valid age (18+).'); return; }
+                setError(null);
+                setStep(2);
+              }} />
             </View>
           </View>
         )}

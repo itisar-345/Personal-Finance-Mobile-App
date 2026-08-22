@@ -37,7 +37,7 @@ interface StoreContextValue {
   updateInvestment: (id: string, i: Partial<Investment>) => void;
   deleteInvestment: (id: string) => void;
   // debts
-  addDebt: (d: Omit<Debt, 'id'>) => void;
+  addDebt: (d: Omit<Debt, 'id'>) => string;
   updateDebt: (id: string, d: Partial<Debt>) => void;
   deleteDebt: (id: string) => void;
   // goals
@@ -83,13 +83,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     })();
   }, []);
 
-  const persist = useCallback(async (next: AppData) => {
+  const persist = useCallback((next: AppData) => {
     setData(next);
-    await writeData(next);
+    writeData(next);
   }, []);
 
   const save = (next: AppData) => {
-    writeData(next).catch(() => {});
+    writeData(next);
   };
 
   const addTransaction = useCallback((t: Omit<Transaction, 'id'>) => {
@@ -203,12 +203,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const addDebt = useCallback((d: Omit<Debt, 'id'>) => {
+  const addDebt = useCallback((d: Omit<Debt, 'id'>): string => {
+    const id = genId('dbt');
     setData((prev) => {
-      const next = { ...prev, debts: [...prev.debts, { ...d, id: genId('dbt'), status: d.status || 'active', date: d.date || new Date().toISOString().slice(0, 10) }] };
+      const next = { ...prev, debts: [...prev.debts, { ...d, id, status: d.status || 'active', date: d.date || new Date().toISOString().slice(0, 10) }] };
       save(next);
       return next;
     });
+    return id;
   }, []);
 
   const updateDebt = useCallback((id: string, d: Partial<Debt>) => {
@@ -337,7 +339,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const importData = useCallback((d: AppData) => {
-    persist({ ...DEFAULT_DATA, ...d, settings: { ...DEFAULT_DATA.settings, ...d.settings } });
+    const { pin: _pin, ...safeSettings } = { ...DEFAULT_DATA.settings, ...d.settings };
+    persist({ ...DEFAULT_DATA, ...d, settings: { ...safeSettings, pin: null } });
   }, [persist]);
 
   const resetData = useCallback(() => {
