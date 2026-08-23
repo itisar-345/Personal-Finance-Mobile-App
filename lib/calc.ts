@@ -51,6 +51,67 @@ export function inPeriod(dateStr: string, period: 'monthly' | 'annual', ref: str
   return yearKey(dateStr) === yearKey(ref);
 }
 
+/** Materialize recurring transaction occurrences through `asOf` without duplicating stored data. */
+export function recurringTransactionsThrough(transactions: Transaction[], asOf: string): Transaction[] {
+  const result: Transaction[] = [];
+  for (const transaction of transactions) {
+    if (transaction.recurring === 'none') {
+      if (transaction.date <= asOf) result.push(transaction);
+      continue;
+    }
+
+    // Paused and closed schedules retain their history, but stop at the lifecycle date.
+    const lifecycleEnd = transaction.status === 'active'
+      ? asOf
+      : (transaction.closedDate || transaction.pausedDate || transaction.date);
+    const endDate = lifecycleEnd < asOf ? lifecycleEnd : asOf;
+    if (transaction.date > endDate) continue;
+
+    result.push(transaction);
+    let occurrence = nextRecurringDate(transaction.date, transaction.recurring);
+    while (occurrence <= endDate) {
+      result.push({
+        ...transaction,
+        id: `${transaction.id}:occurrence:${occurrence}`,
+        date: occurrence,
+        recurringRef: transaction.id,
+        recurring: 'none',
+        status: 'active',
+        pausedDate: undefined,
+        closedDate: undefined,
+      });
+      occurrence = nextRecurringDate(occurrence, transaction.recurring, transaction.date);
+    }
+  }
+  return result;
+}
+
+function nextRecurringDate(current: string, frequency: Exclude<Transaction['recurring'], 'none'>, anchor = current): string {
+  const [currentYear, currentMonth] = current.split('-').map(Number);
+  const [, anchorMonth, anchorDay] = anchor.split('-').map(Number);
+  const year = frequency === 'monthly'
+    ? currentYear + (currentMonth === 12 ? 1 : 0)
+    : currentYear + 1;
+  const month = frequency === 'monthly' ? (currentMonth % 12) + 1 : anchorMonth;
+  const lastDay = new Date(year, month, 0).getDate();
+  return `${year}-${String(month).padStart(2, '0')}-${String(Math.min(anchorDay, lastDay)).padStart(2, '0')}`;
+}
+
+function dateAfterMonths(date: string, months: number): string {
+  const [year, month, day] = date.split('-').map(Number);
+  const totalMonths = year * 12 + month - 1 + months;
+  const targetYear = Math.floor(totalMonths / 12);
+  const targetMonth = (totalMonths % 12) + 1;
+  const lastDay = new Date(targetYear, targetMonth, 0).getDate();
+  return `${targetYear}-${String(targetMonth).padStart(2, '0')}-${String(Math.min(day, lastDay)).padStart(2, '0')}`;
+}
+
+function dateAfterDays(date: string, days: number): string {
+  const value = new Date(`${date}T00:00:00`);
+  value.setDate(value.getDate() + days);
+  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
+}
+
 export type PeriodMode = 'monthly' | 'annual';
 
 export interface PeriodGroup<T> {
@@ -490,7 +551,6 @@ function periodsBetween(start: string, end: string, freq: ContributionFreq): num
 export function projectedContributionEntries(c: Contribution, asOf: string): { date: string; amount: number }[] {
   if (c.type !== 'recurring') return [];
   const freq = c.freq || 'monthly';
-  const start = new Date(c.startDate);
   let endStr: string;
   if (c.status === 'paused' && c.pausedDate) endStr = c.pausedDate;
   else if (c.status === 'closed' && c.closedDate) endStr = c.closedDate;
@@ -499,12 +559,11 @@ export function projectedContributionEntries(c: Contribution, asOf: string): { d
   const count = Math.max(0, periodsBetween(c.startDate, endCap, freq));
   const entries: { date: string; amount: number }[] = [];
   for (let i = 0; i <= count; i++) {
-    let d: Date;
-    if (freq === 'weekly') d = new Date(start.getTime() + i * 7 * 24 * 60 * 60 * 1000);
-    else if (freq === 'quarterly') d = new Date(start.getFullYear(), start.getMonth() + i * 3, start.getDate());
-    else d = new Date(start.getFullYear(), start.getMonth() + i, start.getDate());
-    if (d.getTime() > new Date(endCap).getTime()) break;
-    entries.push({ date: d.toISOString().slice(0, 10), amount: c.amount });
+    const date = freq === 'weekly'
+      ? dateAfterDays(c.startDate, i * 7)
+      : dateAfterMonths(c.startDate, i * (freq === 'quarterly' ? 3 : 1));
+    if (date > endCap) break;
+    entries.push({ date, amount: c.amount });
   }
   return entries;
 }

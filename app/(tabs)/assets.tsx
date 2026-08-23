@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, SafeAreaView, Pressable } from 'react-native';
-import { Card, SectionTitle, useUi, Chip, Button, Input, Field, EmptyState, RiskBadge, StatusBadge } from '@/components/ui';
+import { Card, SectionTitle, useUi, Chip, Button, Input, Field, EmptyState, StatusBadge, LifecycleActions } from '@/components/ui';
 import { DonutChart, ProgressBar } from '@/components/charts';
 import { Sheet } from '@/components/Sheet';
 import { useStore } from '@/lib/store';
@@ -54,7 +54,7 @@ export default function AssetsScreen() {
 
 function AssetsTab() {
   const { data, palette, currency } = useUi();
-  const { addAsset, updateAsset, deleteAsset, addContribution, updateContribution } = useStore();
+  const { addAsset, updateAsset, deleteAsset, addContribution, updateContribution, deleteContribution, setAssetStatus, setContributionStatus } = useStore();
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editingAsset, setEditingAsset] = useState<Asset | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Asset | null>(null);
@@ -73,6 +73,13 @@ function AssetsTab() {
   ].filter((d) => d.value > 0);
 
   const grouped = useMemo(() => groupByPeriod(data.assets, period), [data.assets, period]);
+
+  const setAssetLifecycle = (asset: Asset, status: Asset['status']) => {
+    setAssetStatus(asset.id, status);
+    data.contributions
+      .filter((contribution) => contribution.holdingId === asset.id)
+      .forEach((contribution) => setContributionStatus(contribution.id, status));
+  };
 
   return (
     <View style={{ gap: 14 }}>
@@ -191,11 +198,11 @@ function AssetsTab() {
           existingContrib={data.contributions.find((c) => c.holdingId === editingAsset.id)}
           onSave={(fields, contrib) => {
             updateAsset(editingAsset.id, fields);
+            const existing = data.contributions.find((c) => c.holdingId === editingAsset.id);
             if (contrib) {
-              const existing = data.contributions.find((c) => c.holdingId === editingAsset.id);
               if (existing) updateContribution(existing.id, contrib);
               else addContribution({ ...contrib, holdingId: editingAsset.id, holdingKind: 'asset' });
-            }
+            } else if (existing) deleteContribution(existing.id);
             setEditingAsset(null);
           }}
         />
@@ -209,7 +216,7 @@ function AssetSheet({
 }: {
   visible: boolean; onClose: () => void;
   onAdd?: (a: Omit<Asset, 'id'>, contrib?: Omit<Contribution, 'id' | 'holdingId' | 'holdingKind'>) => void;
-  onSave?: (a: Partial<Asset>, contrib?: Partial<Contribution>) => void;
+  onSave?: (a: Partial<Asset>, contrib?: Omit<Contribution, 'id' | 'holdingId' | 'holdingKind'>) => void;
   initial?: Asset;
   existingContrib?: Contribution;
 }) {
@@ -227,7 +234,9 @@ function AssetSheet({
     if (!name.trim() || !v) return;
     const fields = { name: name.trim(), type, value: v, liquid: type === 'cash' || type === 'bank' ? true : liquid, date };
     const amt = Number(contribAmount);
-    const contrib = amt ? { type: contribType, amount: amt, freq: contribType === 'recurring' ? freq : undefined, startDate: date, status: 'active' as const } : undefined;
+    const contrib: Omit<Contribution, 'id' | 'holdingId' | 'holdingKind'> | undefined = amt
+      ? { type: contribType, amount: amt, freq: contribType === 'recurring' ? freq : undefined, startDate: date, status: 'active' }
+      : undefined;
     if (initial && onSave) {
       onSave(fields, contrib);
     } else {
@@ -285,7 +294,7 @@ function AssetSheet({
 
 function InvestmentsTab() {
   const { data, palette, currency } = useUi();
-  const { addInvestment, addInvestmentWithContribution, updateInvestment, deleteInvestment, setInvestmentStatus, addContribution, updateContribution } = useStore();
+  const { addInvestment, addInvestmentWithContribution, updateInvestment, deleteInvestment, setInvestmentStatus, addContribution, updateContribution, deleteContribution } = useStore();
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editingInvestment, setEditingInvestment] = useState<Investment | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Investment | null>(null);
@@ -378,11 +387,11 @@ function InvestmentsTab() {
           existingContrib={data.contributions.find((c) => c.holdingId === editingInvestment.id)}
           onSave={(fields, contrib) => {
             updateInvestment(editingInvestment.id, fields);
+            const existing = data.contributions.find((c) => c.holdingId === editingInvestment.id);
             if (contrib) {
-              const existing = data.contributions.find((c) => c.holdingId === editingInvestment.id);
               if (existing) updateContribution(existing.id, contrib);
               else addContribution({ ...contrib, holdingId: editingInvestment.id, holdingKind: 'investment' });
-            }
+            } else if (existing) deleteContribution(existing.id);
             setEditingInvestment(null);
           }}
         />
@@ -745,7 +754,7 @@ function InvestmentEditSheet({
   onClose: () => void;
   investment: Investment;
   existingContrib?: Contribution;
-  onSave: (i: Partial<Investment>, contrib?: Partial<Contribution>) => void;
+  onSave: (i: Partial<Investment>, contrib?: Omit<Contribution, 'id' | 'holdingId' | 'holdingKind'>) => void;
 }) {
   const { palette } = useUi();
   const [name, setName] = useState(investment.name);
@@ -762,7 +771,9 @@ function InvestmentEditSheet({
     const pv = Number(purchaseValue);
     if (!name.trim() || !cv) return;
     const amt = Number(contribAmount);
-    const contrib = amt ? { type: contribType, amount: amt, freq: contribType === 'recurring' ? freq : undefined, startDate: purchaseDate, status: 'active' as const } : undefined;
+    const contrib: Omit<Contribution, 'id' | 'holdingId' | 'holdingKind'> | undefined = amt
+      ? { type: contribType, amount: amt, freq: contribType === 'recurring' ? freq : undefined, startDate: purchaseDate, status: 'active' }
+      : undefined;
     onSave({ name: name.trim(), type, currentValue: cv, purchaseValue: pv, purchaseDate }, contrib);
   };
 

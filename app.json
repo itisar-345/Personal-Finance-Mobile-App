@@ -1,0 +1,15 @@
+{
+  "expo": {
+    "name": "FinTrack",
+    "slug": "fintrack",
+    "plugins": [
+      "expo-router",
+      "expo-notifications"
+    ],
+    "android": {
+      "permissions": [
+        "POST_NOTIFICATIONS"
+      ]
+    }
+  }
+}

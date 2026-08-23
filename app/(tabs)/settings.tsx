@@ -12,7 +12,7 @@ function formatBackupDate(iso: string): string {
   const d = new Date(iso);
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
-import type { Currency, AppData, Category, RecurringType, ItemStatus } from '@/lib/types';
+import type { Currency, AppData, Category, RecurringType, ContributionFreq, ItemStatus } from '@/lib/types';
 
 export default function SettingsScreen() {
   const { data, palette, currency, settings } = useUi();
@@ -29,10 +29,16 @@ export default function SettingsScreen() {
   const [reminderStatus, setReminderStatus] = useState<string | null>(null);
 
   const recurringCount = useMemo(
-    () =>
-      data.transactions.filter((t) => t.recurring !== 'none').length +
-      data.contributions.filter((c) => c.type === 'recurring' && c.status === 'active').length,
-    [data.transactions, data.contributions],
+    () => {
+      const activeHoldingIds = new Set([
+        ...data.debts.filter((d) => d.status === 'active').map((d) => d.id),
+        ...data.investments.filter((i) => i.status === 'active').map((i) => i.id),
+        ...data.assets.filter((a) => a.status === 'active').map((a) => a.id),
+      ]);
+      return data.transactions.filter((t) => t.recurring !== 'none').length +
+        data.contributions.filter((c) => c.type === 'recurring' && c.status === 'active' && activeHoldingIds.has(c.holdingId)).length;
+    },
+    [data.transactions, data.contributions, data.debts, data.investments, data.assets],
   );
 
   const doExport = async () => {
@@ -179,7 +185,7 @@ export default function SettingsScreen() {
             <Text style={{ fontSize: 11, color: palette.danger, marginTop: 4 }}>{reminderStatus}</Text>
           )}
           <Text style={{ fontSize: 11, color: palette.textMuted, marginTop: 4 }}>
-            Get a notification on the due date of each recurring payment — SIPs, EMIs, subscriptions, salary credits. No internet needed.
+            Active recurring items alert at 9:00 AM local time on their due date. No internet needed.
           </Text>
           {settings.reminderEnabled && recurringCount > 0 && (
             <Pressable
@@ -487,32 +493,50 @@ function ImportJsonSheet({
 
 type RecurringItem = {
   id: string;
+  contributionId?: string;
   name: string;
   type: string;
-  kind: 'transaction' | 'debt' | 'investment';
-  recurring: RecurringType;
+  kind: 'transaction' | 'asset' | 'debt' | 'investment';
+  recurring: Exclude<RecurringType, 'none'> | ContributionFreq;
   status: ItemStatus;
   date: string;
   amount: number;
 };
 
-function nextDueDate(date: string, recurring: RecurringType): string {
-  if (recurring === 'none') return date;
-  const base = new Date(date);
-  const now = new Date();
-  if (base > now) return date;
-  const d = new Date(base);
-  if (recurring === 'monthly') {
-    while (d <= now) d.setMonth(d.getMonth() + 1);
+function nextDueDate(date: string, recurring: RecurringItem['recurring']): string {
+  const today = todayISO();
+  if (date > today) return date;
+  let due = date;
+  if (recurring === 'weekly') {
+    while (due <= today) due = addDays(due, 7);
+  } else if (recurring === 'monthly') {
+    while (due <= today) due = advanceDueDate(due, 1);
+  } else if (recurring === 'quarterly') {
+    while (due <= today) due = advanceDueDate(due, 3);
   } else if (recurring === 'yearly') {
-    while (d <= now) d.setFullYear(d.getFullYear() + 1);
+    while (due <= today) due = advanceDueDate(due, 12);
   }
-  return d.toISOString().slice(0, 10);
+  return due;
+}
+
+function addDays(date: string, days: number): string {
+  const value = new Date(`${date}T00:00:00`);
+  value.setDate(value.getDate() + days);
+  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
+}
+
+function advanceDueDate(date: string, months: number): string {
+  const [year, month, day] = date.split('-').map(Number);
+  const totalMonths = year * 12 + month - 1 + months;
+  const nextYear = Math.floor(totalMonths / 12);
+  const nextMonth = (totalMonths % 12) + 1;
+  const lastDay = new Date(nextYear, nextMonth, 0).getDate();
+  return `${nextYear}-${String(nextMonth).padStart(2, '0')}-${String(Math.min(day, lastDay)).padStart(2, '0')}`;
 }
 
 function RecurringItemsSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const { data, palette, currency } = useUi();
-  const { setTransactionStatus, setDebtStatus, setInvestmentStatus } = useStore();
+  const { setTransactionStatus, setAssetStatus, setDebtStatus, setInvestmentStatus, setContributionStatus } = useStore();
 
   const items: RecurringItem[] = useMemo(() => {
     const txns = data.transactions
@@ -524,52 +548,75 @@ function RecurringItemsSheet({ visible, onClose }: { visible: boolean; onClose: 
           name: t.note || cat?.name || t.type,
           type: t.type === 'income' ? 'Income' : 'Expense',
           kind: 'transaction' as const,
-          recurring: t.recurring,
+          recurring: t.recurring as Exclude<RecurringType, 'none'>,
           status: t.status,
           date: t.date,
           amount: t.amount,
         };
       });
     const debts = data.debts
-      .filter((d) => d.status === 'active' && data.contributions.some((c) => c.holdingId === d.id && c.type === 'recurring'))
+      .filter((d) => d.status !== 'closed' && data.contributions.some((c) => c.holdingId === d.id && c.type === 'recurring' && c.status !== 'closed'))
       .map((d) => {
-        const contrib = data.contributions.find((c) => c.holdingId === d.id && c.type === 'recurring');
+        const contrib = data.contributions.find((c) => c.holdingId === d.id && c.type === 'recurring' && c.status !== 'closed');
         return {
           id: d.id,
+          contributionId: contrib?.id,
           name: d.name,
           type: d.type,
           kind: 'debt' as const,
-          recurring: (contrib?.freq || 'monthly') as RecurringType,
+          recurring: contrib?.freq || 'monthly',
           status: d.status,
           date: contrib?.startDate || d.date || todayISO(),
           amount: contrib?.amount || d.emi,
         };
       });
+    const assets = data.assets
+      .filter((a) => a.status !== 'closed' && data.contributions.some((c) => c.holdingId === a.id && c.type === 'recurring' && c.status !== 'closed'))
+      .map((a) => {
+        const contrib = data.contributions.find((c) => c.holdingId === a.id && c.type === 'recurring' && c.status !== 'closed');
+        return {
+          id: a.id,
+          contributionId: contrib?.id,
+          name: a.name,
+          type: a.type,
+          kind: 'asset' as const,
+          recurring: contrib?.freq || 'monthly',
+          status: a.status,
+          date: contrib?.startDate || a.date,
+          amount: contrib?.amount || 0,
+        };
+      });
     const invs = data.investments
-      .filter((i) => i.status === 'active' && data.contributions.some((c) => c.holdingId === i.id && c.type === 'recurring'))
+      .filter((i) => i.status !== 'closed' && data.contributions.some((c) => c.holdingId === i.id && c.type === 'recurring' && c.status !== 'closed'))
       .map((i) => {
-        const contrib = data.contributions.find((c) => c.holdingId === i.id && c.type === 'recurring');
+        const contrib = data.contributions.find((c) => c.holdingId === i.id && c.type === 'recurring' && c.status !== 'closed');
         return {
           id: i.id,
+          contributionId: contrib?.id,
           name: i.name,
           type: i.type,
           kind: 'investment' as const,
-          recurring: (contrib?.freq || 'monthly') as RecurringType,
+          recurring: contrib?.freq || 'monthly',
           status: i.status,
           date: contrib?.startDate || i.purchaseDate,
           amount: contrib?.amount || 0,
         };
       });
-    return [...txns, ...debts, ...invs];
-  }, [data.transactions, data.debts, data.investments, data.categories, data.contributions]);
+    return [...txns, ...assets, ...debts, ...invs];
+  }, [data.transactions, data.assets, data.debts, data.investments, data.categories, data.contributions]);
 
   const togglePause = (item: RecurringItem) => {
     if (item.kind === 'transaction') {
       setTransactionStatus(item.id, item.status === 'active' ? 'paused' : 'active');
+    } else if (item.kind === 'asset') {
+      setAssetStatus(item.id, item.status === 'active' ? 'paused' : 'active');
+      if (item.contributionId) setContributionStatus(item.contributionId, item.status === 'active' ? 'paused' : 'active');
     } else if (item.kind === 'debt') {
       setDebtStatus(item.id, item.status === 'active' ? 'paused' : 'active');
+      if (item.contributionId) setContributionStatus(item.contributionId, item.status === 'active' ? 'paused' : 'active');
     } else {
       setInvestmentStatus(item.id, item.status === 'active' ? 'paused' : 'active');
+      if (item.contributionId) setContributionStatus(item.contributionId, item.status === 'active' ? 'paused' : 'active');
     }
   };
 
@@ -583,6 +630,7 @@ function RecurringItemsSheet({ visible, onClose }: { visible: boolean; onClose: 
         items.map((item) => {
           const due = nextDueDate(item.date, item.recurring);
           const isPaused = item.status === 'paused';
+          const dueLabel = isPaused ? 'Paused' : `Next: ${due}`;
           return (
             <View key={`${item.kind}-${item.id}`} style={[styles.recurringItemRow, { borderBottomColor: palette.border }]}>
               <View style={{ flex: 1 }}>
@@ -591,7 +639,7 @@ function RecurringItemsSheet({ visible, onClose }: { visible: boolean; onClose: 
                   <StatusBadge status={item.status} />
                 </View>
                 <Text style={{ fontSize: 11, color: palette.textMuted, marginTop: 2 }}>
-                  {item.type} · {item.recurring} · Next: {due}
+                  {item.type} · {item.recurring} · {dueLabel}
                   {item.amount > 0 && ` · ${formatMoney(item.amount, currency, { compact: true })}`}
                 </Text>
               </View>

@@ -17,6 +17,7 @@ import {
   allocationDrift,
   lifestyleInflation,
   inPeriod,
+  recurringTransactionsThrough,
 } from '@/lib/calc';
 import { formatMoney, formatPercent, todayISO, monthLabel } from '@/lib/format';
 import { TrendingUp, Wallet, Shield, AlertTriangle } from 'lucide-react-native';
@@ -25,9 +26,11 @@ export default function DashboardScreen() {
   const { data, palette, currency } = useUi();
   const [period, setPeriod] = useState<'monthly' | 'annual'>('monthly');
   const today = todayISO();
+  const transactions = useMemo(() => recurringTransactionsThrough(data.transactions, today), [data.transactions, today]);
+  const recurringData = useMemo(() => ({ ...data, transactions }), [data, transactions]);
 
-  const ratios = useMemo(() => computeRatios(data, today), [data, today]);
-  const totals = useMemo(() => computeTotals(data.transactions, data.categories, period, today), [data, period, today]);
+  const ratios = useMemo(() => computeRatios(recurringData, today), [recurringData, today]);
+  const totals = useMemo(() => computeTotals(transactions, data.categories, period, today), [transactions, data.categories, period, today]);
 
   // last 6 months trend
   const trend = useMemo(() => {
@@ -38,11 +41,11 @@ export default function DashboardScreen() {
       months.push(`${m.getFullYear()}-${String(m.getMonth() + 1).padStart(2, '0')}`);
     }
     return months.map((mk) => {
-      const inc = data.transactions.filter((t) => t.type === 'income' && monthKey(t.date) === mk).reduce((s, t) => s + t.amount, 0);
-      const exp = data.transactions.filter((t) => t.type === 'expense' && monthKey(t.date) === mk).reduce((s, t) => s + t.amount, 0);
+      const inc = transactions.filter((t) => t.type === 'income' && monthKey(t.date) === mk).reduce((s, t) => s + t.amount, 0);
+      const exp = transactions.filter((t) => t.type === 'expense' && monthKey(t.date) === mk).reduce((s, t) => s + t.amount, 0);
       return { label: monthLabel(mk).split(' ')[0], value: inc, value2: exp };
     });
-  }, [data]);
+  }, [transactions]);
 
   const nw = ratios.netWorth;
   const assets = totalAssets(data.assets);
@@ -53,27 +56,27 @@ export default function DashboardScreen() {
   const bandLabel = data.settings.age ? bandLabelForAge(data.settings.age) : null;
   const targetAlloc = data.settings.allocationTargets || (data.settings.age ? bandForAge(data.settings.age) : null);
   const drift = targetAlloc ? allocationDrift(actual, targetAlloc) : [];
-  const lifeInfl = useMemo(() => lifestyleInflation(data.transactions, data.categories), [data]);
+  const lifeInfl = useMemo(() => lifestyleInflation(transactions, data.categories), [transactions, data.categories]);
 
   const catMap = useMemo(() => new Map(data.categories.map((c) => [c.id, c])), [data]);
 
   const expenseBreakdown = useMemo(() => {
     const map: Record<string, number> = {};
-    data.transactions.filter((t) => t.type === 'expense' && inPeriod(t.date, period, today))
+    transactions.filter((t) => t.type === 'expense' && inPeriod(t.date, period, today))
       .forEach((t) => { map[t.categoryId] = (map[t.categoryId] || 0) + t.amount; });
     return Object.entries(map)
       .map(([id, amount]) => ({ id, name: catMap.get(id)?.name || 'Unknown', amount }))
       .sort((a, b) => b.amount - a.amount);
-  }, [data, period, today, catMap]);
+  }, [transactions, period, today, catMap]);
 
   const incomeBreakdown = useMemo(() => {
     const map: Record<string, number> = {};
-    data.transactions.filter((t) => t.type === 'income' && inPeriod(t.date, period, today))
+    transactions.filter((t) => t.type === 'income' && inPeriod(t.date, period, today))
       .forEach((t) => { map[t.categoryId] = (map[t.categoryId] || 0) + t.amount; });
     return Object.entries(map)
       .map(([id, amount]) => ({ id, name: catMap.get(id)?.name || 'Unknown', amount }))
       .sort((a, b) => b.amount - a.amount);
-  }, [data, period, today, catMap]);
+  }, [transactions, period, today, catMap]);
 
   const assetTypeBreakdown = useMemo(() => {
     const map: Record<string, number> = {};
@@ -122,7 +125,7 @@ export default function DashboardScreen() {
         <View style={styles.row2}>
           <Card style={styles.halfCard}>
             <Text style={[styles.cardTitle, { color: palette.textMuted }]}>Savings Rate</Text>
-            <Gauge value={ratios.savingsRate} color={palette.primary} />
+            <Gauge value={totals.savingsRate} color={palette.primary} />
             <Text style={[styles.cardFoot, { color: palette.text }]}>
               {formatMoney(totals.savings, currency, { compact: true })} saved this {period === 'monthly' ? 'month' : 'year'}
             </Text>
@@ -193,7 +196,7 @@ export default function DashboardScreen() {
         </Card>
 
         {/* Asset allocation */}
-        {invest > 0 && (
+        {invest > 0 || data.assets.some((asset) => asset.status !== 'closed' && asset.type === 'gold') ? (
           <Card>
             <SectionTitle title="Asset Allocation" action={bandLabel ? <Text style={[styles.bandTag, { color: palette.textMuted }]}>Target: {bandLabel}</Text> : undefined} />
             <DonutChart
@@ -220,7 +223,7 @@ export default function DashboardScreen() {
               </View>
             )}
           </Card>
-        )}
+        ) : null}
 
         {/* Income breakdown — donut */}
         {incomeBreakdown.length > 0 && (

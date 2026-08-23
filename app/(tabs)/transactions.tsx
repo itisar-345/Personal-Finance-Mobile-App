@@ -4,7 +4,7 @@ import { Card, SectionTitle, useUi, Chip, Button, Input, Field, EmptyState, Stat
 import { DonutChart } from '@/components/charts';
 import { Sheet } from '@/components/Sheet';
 import { useStore } from '@/lib/store';
-import { computeTotals, monthKey, yearKey, inPeriod, groupByPeriod } from '@/lib/calc';
+import { computeTotals, monthKey, yearKey, inPeriod, groupByPeriod, recurringTransactionsThrough } from '@/lib/calc';
 import { formatMoney, todayISO, monthLabel } from '@/lib/format';
 import { Plus, Repeat, Trash2, X, Pencil } from 'lucide-react-native';
 import type { Transaction, TxnType, RecurringType, Category } from '@/lib/types';
@@ -20,12 +20,13 @@ export default function TransactionsScreen() {
   const [filter, setFilter] = useState<Filter>('all');
   const [period, setPeriod] = useState<Period>('monthly');
   const today = todayISO();
+  const transactions = useMemo(() => recurringTransactionsThrough(data.transactions, today), [data.transactions, today]);
 
-  const totals = useMemo(() => computeTotals(data.transactions, data.categories, period, today), [data, period, today]);
+  const totals = useMemo(() => computeTotals(transactions, data.categories, period, today), [transactions, data.categories, period, today]);
 
   const periodTxns = useMemo(
-    () => data.transactions.filter((t) => inPeriod(t.date, period, today)).sort((a, b) => b.date.localeCompare(a.date)),
-    [data, today, period],
+    () => transactions.filter((t) => inPeriod(t.date, period, today)).sort((a, b) => b.date.localeCompare(a.date)),
+    [transactions, today, period],
   );
   const shown = filter === 'all' ? periodTxns : periodTxns.filter((t) => t.type === filter);
 
@@ -134,9 +135,9 @@ export default function TransactionsScreen() {
         {/* Recurring transactions */}
         {recurring.length > 0 && (
           <Card>
-            <SectionTitle title="Recurring (label only)" action={<Repeat size={16} color={palette.textMuted} />} />
+            <SectionTitle title="Recurring schedules" action={<Repeat size={16} color={palette.textMuted} />} />
             <Text style={{ fontSize: 11, color: palette.textMuted, marginBottom: 8 }}>
-              These are reminders only — amounts are not projected into future months automatically.
+              Amounts are included automatically on each due date.
             </Text>
             {recurring.map((t) => (
               <View key={t.id} style={styles.recurRow}>
@@ -175,7 +176,7 @@ export default function TransactionsScreen() {
                   {group.items.map((t) => {
                     const cat = catMap.get(t.categoryId);
                     return (
-                      <Pressable key={t.id} style={styles.txnRow} onPress={() => setEditTxn(t)}>
+                      <Pressable key={t.id} style={styles.txnRow} onPress={() => setEditTxn(t.recurringRef ? data.transactions.find((source) => source.id === t.recurringRef) || t : t)}>
                         <View style={[styles.txnIcon, { backgroundColor: (t.type === 'income' ? palette.success : palette.danger) + '22' }]}>
                           <Text style={{ fontSize: 16, fontWeight: '700', color: t.type === 'income' ? palette.success : palette.danger }}>
                             {t.type === 'income' ? '↑' : '↓'}
@@ -188,10 +189,10 @@ export default function TransactionsScreen() {
                         <Text style={[styles.txnAmt, { color: t.type === 'income' ? palette.success : palette.text }]}>
                           {t.type === 'income' ? '+' : '-'}{formatMoney(t.amount, currency, { compact: true })}
                         </Text>
-                        <Pressable onPress={() => setEditTxn(t)} hitSlop={8}>
+                        <Pressable onPress={() => setEditTxn(t.recurringRef ? data.transactions.find((source) => source.id === t.recurringRef) || t : t)} hitSlop={8}>
                           <Pencil size={15} color={palette.textMuted} />
                         </Pressable>
-                        <Pressable onPress={() => deleteTransaction(t.id)} hitSlop={8}>
+                        <Pressable onPress={() => deleteTransaction(t.recurringRef || t.id)} hitSlop={8}>
                           <X size={16} color={palette.textMuted} />
                         </Pressable>
                       </Pressable>
@@ -271,7 +272,7 @@ function TransactionSheet({
       <Field label="Date">
         <Input value={date} onChangeText={setDate} placeholder="YYYY-MM-DD" />
       </Field>
-      <Field label="Recurring (label only — not auto-projected)">
+      <Field label="Repeat">
         <View style={styles.typeToggle}>
           <Chip label="One-time" selected={recurring === 'none'} onPress={() => setRecurring('none')} />
           <Chip label="Monthly" selected={recurring === 'monthly'} onPress={() => setRecurring('monthly')} />
@@ -337,7 +338,7 @@ function EditTransactionSheet({
       <Field label="Date">
         <Input value={date} onChangeText={setDate} placeholder="YYYY-MM-DD" />
       </Field>
-      <Field label="Recurring (label only — not auto-projected)">
+      <Field label="Repeat">
         <View style={styles.typeToggle}>
           <Chip label="One-time" selected={recurring === 'none'} onPress={() => setRecurring('none')} />
           <Chip label="Monthly" selected={recurring === 'monthly'} onPress={() => setRecurring('monthly')} />

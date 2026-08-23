@@ -16,6 +16,9 @@ function Gate({ children }: { children: React.ReactNode }) {
   const appState = useRef(AppState.currentState);
 
   useEffect(() => {
+    if (ready && data.settings.reminderEnabled) {
+      scheduleRecurringNotifications(data);
+    }
     const sub = AppState.addEventListener('change', (next) => {
       if (appState.current === 'active' && next.match(/inactive|background/)) {
         if (data.settings.pin) setUnlocked(false);
@@ -26,7 +29,7 @@ function Gate({ children }: { children: React.ReactNode }) {
       appState.current = next;
     });
     return () => sub.remove();
-  }, [data.settings.pin, data.settings.reminderEnabled, data]);
+  }, [ready, data.settings.pin, data.settings.reminderEnabled, data]);
 
   if (!ready) {
     return (

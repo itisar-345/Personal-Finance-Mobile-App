@@ -1,6 +1,8 @@
-import * as FileSystem from 'expo-file-system';
+// The async helpers used here live in Expo's legacy compatibility module in
+// SDK 54. Importing from the package root compiles, but throws at runtime.
+import * as FileSystem from 'expo-file-system/legacy';
 
-const DIR = FileSystem.documentDirectory + 'FinTrackData/';
+const DIR = `${FileSystem.documentDirectory ?? ''}FinTrackData/`;
 const FILE = DIR + 'data.json';
 
 async function ensureDir(): Promise<void> {
