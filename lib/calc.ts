@@ -190,11 +190,11 @@ export function computeTotals(
 }
 
 export function totalAssets(assets: Asset[]): number {
-  return assets.filter(countsNow).reduce((s, a) => s + a.value, 0);
+  return assets.reduce((s, a) => s + a.value, 0);
 }
 
 export function liquidAssets(assets: Asset[]): number {
-  return assets.filter((a) => countsNow(a) && a.liquid).reduce((s, a) => s + a.value, 0);
+  return assets.filter((a) => a.liquid).reduce((s, a) => s + a.value, 0);
 }
 
 export function totalInvestments(investments: Investment[]): number {
@@ -206,7 +206,8 @@ export function totalDebt(debts: Debt[]): number {
 }
 
 export function monthlyDebtPayments(debts: Debt[]): number {
-  return debts.filter(countsNow).reduce((s, d) => s + d.emi, 0);
+  // Paused debts remain part of net worth, but their payment schedule is not due.
+  return debts.filter((d) => d.status === 'active').reduce((s, d) => s + d.emi, 0);
 }
 
 export function netWorth(data: Pick<AppData, 'assets' | 'investments' | 'debts'>): number {
@@ -398,7 +399,7 @@ export function actualAllocation(
   const byType: Record<string, number> = {};
   for (const i of investments) if (countsNow(i)) byType[i.type] = (byType[i.type] || 0) + i.currentValue;
   // gold assets count toward gold allocation
-  const goldAssets = assets.filter((a) => countsNow(a) && a.type === 'gold').reduce((s, a) => s + a.value, 0);
+  const goldAssets = assets.filter((a) => a.type === 'gold').reduce((s, a) => s + a.value, 0);
   byType['gold'] = (byType['gold'] || 0) + goldAssets;
   const total = Object.values(byType).reduce((s, v) => s + v, 0) || 1;
   return {

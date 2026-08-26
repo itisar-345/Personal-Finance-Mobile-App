@@ -33,7 +33,6 @@ export default function SettingsScreen() {
       const activeHoldingIds = new Set([
         ...data.debts.filter((d) => d.status === 'active').map((d) => d.id),
         ...data.investments.filter((i) => i.status === 'active').map((i) => i.id),
-        ...data.assets.filter((a) => a.status === 'active').map((a) => a.id),
       ]);
       return data.transactions.filter((t) => t.recurring !== 'none').length +
         data.contributions.filter((c) => c.type === 'recurring' && c.status === 'active' && activeHoldingIds.has(c.holdingId)).length;
@@ -536,7 +535,7 @@ function advanceDueDate(date: string, months: number): string {
 
 function RecurringItemsSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const { data, palette, currency } = useUi();
-  const { setTransactionStatus, setAssetStatus, setDebtStatus, setInvestmentStatus, setContributionStatus } = useStore();
+  const { setTransactionStatus, setDebtStatus, setInvestmentStatus, setContributionStatus } = useStore();
 
   const items: RecurringItem[] = useMemo(() => {
     const txns = data.transactions
@@ -570,22 +569,6 @@ function RecurringItemsSheet({ visible, onClose }: { visible: boolean; onClose: 
           amount: contrib?.amount || d.emi,
         };
       });
-    const assets = data.assets
-      .filter((a) => a.status !== 'closed' && data.contributions.some((c) => c.holdingId === a.id && c.type === 'recurring' && c.status !== 'closed'))
-      .map((a) => {
-        const contrib = data.contributions.find((c) => c.holdingId === a.id && c.type === 'recurring' && c.status !== 'closed');
-        return {
-          id: a.id,
-          contributionId: contrib?.id,
-          name: a.name,
-          type: a.type,
-          kind: 'asset' as const,
-          recurring: contrib?.freq || 'monthly',
-          status: a.status,
-          date: contrib?.startDate || a.date,
-          amount: contrib?.amount || 0,
-        };
-      });
     const invs = data.investments
       .filter((i) => i.status !== 'closed' && data.contributions.some((c) => c.holdingId === i.id && c.type === 'recurring' && c.status !== 'closed'))
       .map((i) => {
@@ -602,15 +585,12 @@ function RecurringItemsSheet({ visible, onClose }: { visible: boolean; onClose: 
           amount: contrib?.amount || 0,
         };
       });
-    return [...txns, ...assets, ...debts, ...invs];
+    return [...txns, ...debts, ...invs];
   }, [data.transactions, data.assets, data.debts, data.investments, data.categories, data.contributions]);
 
   const togglePause = (item: RecurringItem) => {
     if (item.kind === 'transaction') {
       setTransactionStatus(item.id, item.status === 'active' ? 'paused' : 'active');
-    } else if (item.kind === 'asset') {
-      setAssetStatus(item.id, item.status === 'active' ? 'paused' : 'active');
-      if (item.contributionId) setContributionStatus(item.contributionId, item.status === 'active' ? 'paused' : 'active');
     } else if (item.kind === 'debt') {
       setDebtStatus(item.id, item.status === 'active' ? 'paused' : 'active');
       if (item.contributionId) setContributionStatus(item.contributionId, item.status === 'active' ? 'paused' : 'active');

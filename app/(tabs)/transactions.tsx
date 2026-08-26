@@ -5,7 +5,7 @@ import { DonutChart } from '@/components/charts';
 import { Sheet } from '@/components/Sheet';
 import { useStore } from '@/lib/store';
 import { computeTotals, monthKey, yearKey, inPeriod, groupByPeriod, recurringTransactionsThrough } from '@/lib/calc';
-import { formatMoney, todayISO, monthLabel } from '@/lib/format';
+import { formatMoney, isValidIsoDate, todayISO, monthLabel } from '@/lib/format';
 import { Plus, Repeat, Trash2, X, Pencil } from 'lucide-react-native';
 import type { Transaction, TxnType, RecurringType, Category } from '@/lib/types';
 
@@ -19,6 +19,7 @@ export default function TransactionsScreen() {
   const [editTxn, setEditTxn] = useState<Transaction | null>(null);
   const [filter, setFilter] = useState<Filter>('all');
   const [period, setPeriod] = useState<Period>('monthly');
+  const [pendingDelete, setPendingDelete] = useState<Transaction | null>(null);
   const today = todayISO();
   const transactions = useMemo(() => recurringTransactionsThrough(data.transactions, today), [data.transactions, today]);
 
@@ -36,8 +37,6 @@ export default function TransactionsScreen() {
     () => data.transactions.filter((t) => t.recurring !== 'none' && (filter === 'all' || t.type === filter)),
     [data, filter],
   );
-  const activeRecurring = recurring.filter((t) => t.status !== 'closed');
-
   const catMap = useMemo(() => new Map(data.categories.map((c) => [c.id, c])), [data]);
 
   const breakdown = useMemo(() => {
@@ -155,7 +154,7 @@ export default function TransactionsScreen() {
                     onReopen={() => setTransactionStatus(t.id, 'active')}
                   />
                 </View>
-                <Pressable onPress={() => deleteTransaction(t.id)} hitSlop={8}>
+                <Pressable onPress={() => setPendingDelete(t)} hitSlop={8}>
                   <Trash2 size={16} color={palette.danger} />
                 </Pressable>
               </View>
@@ -189,10 +188,10 @@ export default function TransactionsScreen() {
                         <Text style={[styles.txnAmt, { color: t.type === 'income' ? palette.success : palette.text }]}>
                           {t.type === 'income' ? '+' : '-'}{formatMoney(t.amount, currency, { compact: true })}
                         </Text>
-                        <Pressable onPress={() => setEditTxn(t.recurringRef ? data.transactions.find((source) => source.id === t.recurringRef) || t : t)} hitSlop={8}>
+                        <Pressable onPress={(event) => { event.stopPropagation(); setEditTxn(t.recurringRef ? data.transactions.find((source) => source.id === t.recurringRef) || t : t); }} hitSlop={8}>
                           <Pencil size={15} color={palette.textMuted} />
                         </Pressable>
-                        <Pressable onPress={() => deleteTransaction(t.recurringRef || t.id)} hitSlop={8}>
+                        <Pressable onPress={(event) => { event.stopPropagation(); setPendingDelete(data.transactions.find((source) => source.id === (t.recurringRef || t.id)) || t); }} hitSlop={8}>
                           <X size={16} color={palette.textMuted} />
                         </Pressable>
                       </Pressable>
@@ -209,11 +208,19 @@ export default function TransactionsScreen() {
 
       {editTxn && (
         <EditTransactionSheet
+          key={editTxn.id}
           txn={editTxn}
           onClose={() => setEditTxn(null)}
           onUpdate={updateTransaction}
           onDelete={deleteTransaction}
           categories={data.categories}
+        />
+      )}
+      {pendingDelete && (
+        <DeleteConfirmSheet
+          name={pendingDelete.note || data.categories.find((category) => category.id === pendingDelete.categoryId)?.name || 'this transaction'}
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={() => { deleteTransaction(pendingDelete.id); setPendingDelete(null); }}
         />
       )}
     </SafeAreaView>
@@ -238,13 +245,17 @@ function TransactionSheet({
   const [note, setNote] = useState('');
   const [date, setDate] = useState(todayISO());
   const [recurring, setRecurring] = useState<RecurringType>('none');
+  const [error, setError] = useState<string | null>(null);
 
   const filtered = categories.filter((c) => c.type === type);
   const selectedCat = categoryId || filtered[0]?.id || '';
 
   const submit = () => {
     const amt = Number(amount);
-    if (!amt || amt <= 0) return;
+    if (!amt || amt <= 0) { setError('Enter an amount greater than zero.'); return; }
+    if (!selectedCat) { setError(`Add an ${type} category in Settings before creating this transaction.`); return; }
+    if (!isValidIsoDate(date)) { setError('Use a valid date in YYYY-MM-DD format.'); return; }
+    setError(null);
     onAdd({ type, amount: amt, categoryId: selectedCat, note: note.trim() || undefined, date, recurring, status: 'active' });
     setAmount(''); setNote(''); setRecurring('none'); setDate(todayISO());
     onClose();
@@ -272,6 +283,7 @@ function TransactionSheet({
       <Field label="Date">
         <Input value={date} onChangeText={setDate} placeholder="YYYY-MM-DD" />
       </Field>
+      {error && <Text style={{ fontSize: 13, color: palette.danger }}>{error}</Text>}
       <Field label="Repeat">
         <View style={styles.typeToggle}>
           <Chip label="One-time" selected={recurring === 'none'} onPress={() => setRecurring('none')} />
@@ -305,13 +317,17 @@ function EditTransactionSheet({
   const [date, setDate] = useState(txn.date);
   const [recurring, setRecurring] = useState<RecurringType>(txn.recurring);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const filtered = categories.filter((c) => c.type === type);
   const selectedCat = categoryId || filtered[0]?.id || '';
 
   const submit = () => {
     const amt = Number(amount);
-    if (!amt || amt <= 0) return;
+    if (!amt || amt <= 0) { setError('Enter an amount greater than zero.'); return; }
+    if (!selectedCat) { setError(`Add an ${type} category in Settings before saving this transaction.`); return; }
+    if (!isValidIsoDate(date)) { setError('Use a valid date in YYYY-MM-DD format.'); return; }
+    setError(null);
     onUpdate(txn.id, { type, amount: amt, categoryId: selectedCat, note: note.trim() || undefined, date, recurring });
     onClose();
   };
@@ -338,6 +354,7 @@ function EditTransactionSheet({
       <Field label="Date">
         <Input value={date} onChangeText={setDate} placeholder="YYYY-MM-DD" />
       </Field>
+      {error && <Text style={{ fontSize: 13, color: palette.danger }}>{error}</Text>}
       <Field label="Repeat">
         <View style={styles.typeToggle}>
           <Chip label="One-time" selected={recurring === 'none'} onPress={() => setRecurring('none')} />
@@ -360,6 +377,21 @@ function EditTransactionSheet({
       ) : (
         <Button label="Delete Transaction" variant="danger" onPress={() => setConfirmDelete(true)} style={{ marginTop: 8 }} />
       )}
+    </Sheet>
+  );
+}
+
+function DeleteConfirmSheet({ name, onCancel, onConfirm }: { name: string; onCancel: () => void; onConfirm: () => void }) {
+  const { palette } = useUi();
+  return (
+    <Sheet visible onClose={onCancel} title="Delete transaction?">
+      <Text style={{ fontSize: 13, color: palette.textMuted, marginBottom: 16 }}>
+        Delete "{name}"? A recurring schedule deletes all of its projected occurrences. This cannot be undone.
+      </Text>
+      <View style={{ flexDirection: 'row', gap: 12 }}>
+        <Button label="Cancel" variant="outline" onPress={onCancel} style={{ flex: 1 }} />
+        <Button label="Delete" variant="danger" onPress={onConfirm} style={{ flex: 1 }} />
+      </View>
     </Sheet>
   );
 }

@@ -114,8 +114,7 @@ export async function scheduleRecurringNotifications(data: AppData): Promise<voi
     const freq = c.freq ?? 'monthly';
     const holding =
       data.debts.find((d) => d.id === c.holdingId) ||
-      data.investments.find((i) => i.id === c.holdingId) ||
-      data.assets.find((a) => a.id === c.holdingId);
+      data.investments.find((i) => i.id === c.holdingId);
     if (!holding || holding.status !== 'active') continue;
     items.push({ name: holding.name, amount: c.amount, freq, date: c.startDate });
   }

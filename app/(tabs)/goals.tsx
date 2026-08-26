@@ -13,8 +13,9 @@ import {
   debtStrategies,
   debtPayoffMonths,
   avgMonthlyExpenses,
+  recurringTransactionsThrough,
 } from '@/lib/calc';
-import { formatMoney, formatPercent, formatMonths, todayISO } from '@/lib/format';
+import { formatMoney, formatPercent, formatMonths, isValidIsoDate, todayISO } from '@/lib/format';
 import { Trash2, Pencil } from 'lucide-react-native';
 import type { Goal } from '@/lib/types';
 
@@ -67,6 +68,7 @@ function GoalsTab() {
             const months = monthsUntil(g.targetDate);
             const isOverdue = months === 0 && progress < 1;
             const required = (!isOverdue && months > 0) ? requiredMonthlyForGoal(g.targetAmount, g.currentAmount, months, data.settings.expectedReturn || 10) : null;
+            const monthlyGap = required === null ? 0 : Math.max(0, required - g.monthlyContribution);
             return (
               <View key={g.id} style={[styles.goalCard, { borderBottomColor: palette.border }]}>
                 <View style={styles.goalHeader}>
@@ -91,8 +93,10 @@ function GoalsTab() {
                 <Text style={{ fontSize: 11, color: isOverdue ? palette.danger : palette.textMuted, marginTop: 4 }}>
                   {isOverdue
                     ? 'Overdue — target date has passed'
-                    : required !== null
-                    ? `Need ${formatMoney(required, currency, { compact: true })}/mo to hit target`
+                  : required !== null
+                    ? monthlyGap > 0
+                      ? `Plan: ${formatMoney(g.monthlyContribution, currency, { compact: true })}/mo · add ${formatMoney(monthlyGap, currency, { compact: true })}/mo`
+                      : `On track with ${formatMoney(g.monthlyContribution, currency, { compact: true })}/mo`
                     : 'Goal reached!'}
                 </Text>
               </View>
@@ -104,6 +108,7 @@ function GoalsTab() {
       <GoalSheet visible={sheetOpen} onClose={() => setSheetOpen(false)} onAdd={addGoal} />
       {editingGoal && (
         <GoalSheet
+          key={editingGoal.id}
           visible={!!editingGoal}
           onClose={() => setEditingGoal(null)}
           initial={editingGoal}
@@ -129,19 +134,25 @@ function GoalSheet({
   onSave?: (g: Partial<Goal>) => void;
   initial?: Goal;
 }) {
+  const { palette } = useUi();
   const [name, setName] = useState(initial?.name ?? '');
   const [kind, setKind] = useState<Goal['kind']>(initial?.kind ?? 'retirement');
   const [targetAmount, setTargetAmount] = useState(initial ? String(initial.targetAmount) : '');
   const [currentAmount, setCurrentAmount] = useState(initial ? String(initial.currentAmount) : '');
   const [targetDate, setTargetDate] = useState(initial?.targetDate ?? '');
   const [monthlyContribution, setMonthlyContribution] = useState(initial ? String(initial.monthlyContribution) : '');
+  const [error, setError] = useState<string | null>(null);
 
   const submit = () => {
     const ta = Number(targetAmount);
     const ca = Number(currentAmount) || 0;
-    if (!name.trim() || !ta) return;
+    if (!name.trim() || ta <= 0 || ca < 0) { setError('Enter a goal name, a target greater than zero, and a valid saved amount.'); return; }
     const date = targetDate || new Date(Date.now() + 5 * 365 * 24 * 3600 * 1000).toISOString().slice(0, 10);
-    const fields = { name: name.trim(), kind, targetAmount: ta, currentAmount: ca, targetDate: date, monthlyContribution: Number(monthlyContribution) || 0 };
+    const monthly = Number(monthlyContribution) || 0;
+    if (!isValidIsoDate(date)) { setError('Use a valid target date in YYYY-MM-DD format.'); return; }
+    if (monthly < 0) { setError('Monthly contribution cannot be negative.'); return; }
+    setError(null);
+    const fields = { name: name.trim(), kind, targetAmount: ta, currentAmount: ca, targetDate: date, monthlyContribution: monthly };
     if (initial && onSave) { onSave(fields); }
     else { onAdd?.(fields); setName(''); setTargetAmount(''); setCurrentAmount(''); setTargetDate(''); setMonthlyContribution(''); onClose(); }
   };
@@ -169,6 +180,7 @@ function GoalSheet({
       <Field label="Target Date">
         <Input value={targetDate} onChangeText={setTargetDate} placeholder="YYYY-MM-DD (default +5 yrs)" />
       </Field>
+      {error && <Text style={{ fontSize: 13, color: palette.danger }}>{error}</Text>}
       <Field label="Monthly Contribution">
         <Input value={monthlyContribution} onChangeText={(t) => setMonthlyContribution(t.replace(/[^0-9.]/g, ''))} keyboardType="numeric" placeholder="0" />
       </Field>
@@ -222,8 +234,8 @@ function SimulatorTab() {
       <Card>
         <Text style={{ fontSize: 13, color: palette.textMuted }}>Projected Net Worth in {yearsNum} years</Text>
         <Text style={{ fontSize: 28, fontWeight: '800', color: palette.text, marginVertical: 4 }}>{formatMoney(final, currency, { compact: true })}</Text>
-        <Text style={{ fontSize: 12, color: palette.success }}>
-          +{formatMoney(final - currentNw, currency, { compact: true })} from today
+        <Text style={{ fontSize: 12, color: final >= currentNw ? palette.success : palette.danger }}>
+          {final >= currentNw ? '+' : ''}{formatMoney(final - currentNw, currency, { compact: true })} from today
         </Text>
         {projection.length > 1 && <LineChart data={projection} height={150} />}
       </Card>
@@ -235,9 +247,10 @@ function EmergencyTab() {
   const { data, palette, currency } = useUi();
   const [months, setMonths] = useState('6');
   const monthsNum = Number(months) || 6;
-  const avgSpend = useMemo(() => avgMonthlyExpenses(data.transactions, todayISO()), [data]);
+  const recurringTransactions = useMemo(() => recurringTransactionsThrough(data.transactions, todayISO()), [data.transactions]);
+  const avgSpend = useMemo(() => avgMonthlyExpenses(recurringTransactions, todayISO()), [recurringTransactions]);
 
-  const liquid = data.assets.filter((a) => a.status !== 'closed' && a.liquid).reduce((s, a) => s + a.value, 0);
+  const liquid = data.assets.filter((a) => a.liquid).reduce((s, a) => s + a.value, 0);
   const target = avgSpend * monthsNum;
   const progress = target > 0 ? Math.min(1, liquid / target) : 0;
 
@@ -283,7 +296,8 @@ function DebtPlannerTab() {
   const { data, palette, currency } = useUi();
   const { snowball, avalanche } = debtStrategies(data.debts);
 
-  if (data.debts.length === 0) {
+  const openDebts = data.debts.filter((debt) => debt.status !== 'closed');
+  if (openDebts.length === 0) {
     return <EmptyState title="No debts to plan" subtitle="Add debts in the Assets tab to see payoff strategies." />;
   }
 

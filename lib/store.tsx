@@ -51,7 +51,6 @@ interface StoreContextValue {
   setContributionStatus: (id: string, status: ItemStatus, date?: string) => void;
   // lifecycle
   setTransactionStatus: (id: string, status: ItemStatus, date?: string) => void;
-  setAssetStatus: (id: string, status: ItemStatus, date?: string) => void;
   setInvestmentStatus: (id: string, status: ItemStatus, date?: string) => void;
   setDebtStatus: (id: string, status: ItemStatus, date?: string) => void;
   // settings
@@ -135,7 +134,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const addAsset = useCallback((a: Omit<Asset, 'id'>): string => {
     const id = genId('ast');
     setData((prev) => {
-      const next = { ...prev, assets: [...prev.assets, { ...a, id, status: a.status || 'active', date: a.date || new Date().toISOString().slice(0, 10) }] };
+      const next = { ...prev, assets: [...prev.assets, { ...a, id, date: a.date || new Date().toISOString().slice(0, 10) }] };
       save(next);
       return next;
     });
@@ -185,7 +184,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const updateInvestment = useCallback((id: string, i: Partial<Investment>) => {
     setData((prev) => {
-      const next = { ...prev, investments: prev.investments.map((x) => (x.id === id ? { ...x, ...i } : x)) };
+      const next = {
+        ...prev,
+        investments: prev.investments.map((x) => {
+          if (x.id !== id) return x;
+          const purchaseValue = i.purchaseValue ?? x.purchaseValue;
+          const currentValue = i.currentValue ?? x.currentValue;
+          if (purchaseValue <= 0 || currentValue <= 0) return x;
+          return { ...x, ...i, purchaseValue, currentValue };
+        }),
+      };
       save(next);
       return next;
     });
@@ -286,10 +294,20 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       setData((prev) => {
         const iso = date || new Date().toISOString().slice(0, 10);
         const patch: Record<string, unknown> = { status };
-        if (status === 'paused') patch.pausedDate = iso;
-        if (status === 'closed') patch.closedDate = iso;
+        if (status === 'paused') { patch.pausedDate = iso; patch.closedDate = undefined; }
+        if (status === 'closed') { patch.closedDate = iso; patch.pausedDate = undefined; }
         if (status === 'active') { patch.pausedDate = undefined; patch.closedDate = undefined; }
-        const next = { ...prev, [kind]: (prev[kind] as any[]).map((x) => (x.id === id ? { ...x, ...patch } : x)) };
+        const next = {
+          ...prev,
+          [kind]: (prev[kind] as any[]).map((x) => (x.id === id ? { ...x, ...patch } : x)),
+          contributions: kind === 'investments' || kind === 'debts'
+            ? prev.contributions.map((x) => (
+              x.holdingKind === (kind === 'investments' ? 'investment' : 'debt') && x.holdingId === id
+                ? { ...x, ...patch }
+                : x
+            ))
+            : prev.contributions,
+        };
         save(next);
         return next;
       });
@@ -298,7 +316,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   );
 
   const setTransactionStatus = useCallback((id: string, status: ItemStatus, date?: string) => setStatus('transactions', id, status, date), [setStatus]);
-  const setAssetStatus = useCallback((id: string, status: ItemStatus, date?: string) => setStatus('assets', id, status, date), [setStatus]);
   const setInvestmentStatus = useCallback((id: string, status: ItemStatus, date?: string) => setStatus('investments', id, status, date), [setStatus]);
   const setDebtStatus = useCallback((id: string, status: ItemStatus, date?: string) => setStatus('debts', id, status, date), [setStatus]);
 
@@ -306,8 +323,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setData((prev) => {
       const iso = date || new Date().toISOString().slice(0, 10);
       const patch: Record<string, unknown> = { status };
-      if (status === 'paused') patch.pausedDate = iso;
-      if (status === 'closed') patch.closedDate = iso;
+      if (status === 'paused') { patch.pausedDate = iso; patch.closedDate = undefined; }
+      if (status === 'closed') { patch.closedDate = iso; patch.pausedDate = undefined; }
       if (status === 'active') { patch.pausedDate = undefined; patch.closedDate = undefined; }
       const next = { ...prev, contributions: prev.contributions.map((x) => (x.id === id ? { ...x, ...patch } : x)) };
       save(next);
@@ -378,7 +395,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     deleteContribution,
     setContributionStatus,
     setTransactionStatus,
-    setAssetStatus,
     setInvestmentStatus,
     setDebtStatus,
     updateSettings,

@@ -45,9 +45,6 @@ export interface Asset {
   liquid: boolean;
   /** ISO date string YYYY-MM-DD when the asset was acquired/recorded */
   date: string;
-  status: ItemStatus;
-  pausedDate?: string;
-  closedDate?: string;
 }
 
 export type InvestmentType =

@@ -22,7 +22,7 @@ import {
   groupByPeriod,
   type PeriodMode,
 } from '@/lib/calc';
-import { formatMoney, formatPercent, todayISO } from '@/lib/format';
+import { formatMoney, formatPercent, isValidIsoDate, todayISO } from '@/lib/format';
 import { Trash2, Pencil } from 'lucide-react-native';
 import type { Asset, AssetType, Investment, InvestmentType, Debt, DebtType, AllocationTarget, Contribution, ContributionType, ContributionFreq } from '@/lib/types';
 
@@ -54,7 +54,7 @@ export default function AssetsScreen() {
 
 function AssetsTab() {
   const { data, palette, currency } = useUi();
-  const { addAsset, updateAsset, deleteAsset, addContribution, updateContribution, deleteContribution, setAssetStatus, setContributionStatus } = useStore();
+  const { addAsset, updateAsset, deleteAsset } = useStore();
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editingAsset, setEditingAsset] = useState<Asset | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Asset | null>(null);
@@ -63,7 +63,7 @@ function AssetsTab() {
   const investTotal = totalInvestments(data.investments);
   const debtTotal = totalDebt(data.debts);
   const nw = netWorth(data);
-  const liquid = data.assets.filter((a) => a.status !== 'closed' && a.liquid).reduce((s, a) => s + a.value, 0);
+  const liquid = data.assets.filter((a) => a.liquid).reduce((s, a) => s + a.value, 0);
   const monthlyDebt = monthlyDebtPayments(data.debts);
 
   const donutData = [
@@ -73,13 +73,6 @@ function AssetsTab() {
   ].filter((d) => d.value > 0);
 
   const grouped = useMemo(() => groupByPeriod(data.assets, period), [data.assets, period]);
-
-  const setAssetLifecycle = (asset: Asset, status: Asset['status']) => {
-    setAssetStatus(asset.id, status);
-    data.contributions
-      .filter((contribution) => contribution.holdingId === asset.id)
-      .forEach((contribution) => setContributionStatus(contribution.id, status));
-  };
 
   return (
     <View style={{ gap: 14 }}>
@@ -154,11 +147,8 @@ function AssetsTab() {
                   <View style={{ flex: 1 }}>
                     <View style={styles.nameRow}>
                       <Text style={{ fontSize: 14, fontWeight: '600', color: palette.text }}>{a.name}</Text>
-                      <StatusBadge status={a.status} />
                     </View>
-                    <Text style={{ fontSize: 11, color: palette.textMuted }}>{a.type} · {a.liquid ? 'Liquid' : 'Illiquid'}{a.closedDate ? ` · closed ${a.closedDate}` : ''}</Text>
-                    {(() => { const mo = monthlyContribution(data.contributions, a.id); return mo > 0 ? <Text style={{ fontSize: 11, color: palette.primary }}>{formatMoney(mo, currency, { compact: true })}/mo recurring</Text> : null; })()}
-
+                    <Text style={{ fontSize: 11, color: palette.textMuted }}>{a.type} · {a.liquid ? 'Liquid' : 'Illiquid'}</Text>
                   </View>
                   <Text style={{ fontSize: 14, fontWeight: '700', color: palette.text }}>{formatMoney(a.value, currency, { compact: true })}</Text>
                   <Pressable onPress={() => setEditingAsset(a)} hitSlop={8}>
@@ -185,26 +175,15 @@ function AssetsTab() {
       <AssetSheet
         visible={sheetOpen}
         onClose={() => setSheetOpen(false)}
-        onAdd={(asset, contrib) => {
-          const id = addAsset(asset);
-          if (contrib) addContribution({ ...contrib, holdingId: id, holdingKind: 'asset' });
-        }}
+        onAdd={addAsset}
       />
       {editingAsset && (
         <AssetSheet
+          key={editingAsset.id}
           visible={!!editingAsset}
           onClose={() => setEditingAsset(null)}
           initial={editingAsset}
-          existingContrib={data.contributions.find((c) => c.holdingId === editingAsset.id)}
-          onSave={(fields, contrib) => {
-            updateAsset(editingAsset.id, fields);
-            const existing = data.contributions.find((c) => c.holdingId === editingAsset.id);
-            if (contrib) {
-              if (existing) updateContribution(existing.id, contrib);
-              else addContribution({ ...contrib, holdingId: editingAsset.id, holdingKind: 'asset' });
-            } else if (existing) deleteContribution(existing.id);
-            setEditingAsset(null);
-          }}
+          onSave={(fields) => { updateAsset(editingAsset.id, fields); setEditingAsset(null); }}
         />
       )}
     </View>
@@ -212,36 +191,32 @@ function AssetsTab() {
 }
 
 function AssetSheet({
-  visible, onClose, onAdd, onSave, initial, existingContrib,
+  visible, onClose, onAdd, onSave, initial,
 }: {
   visible: boolean; onClose: () => void;
-  onAdd?: (a: Omit<Asset, 'id'>, contrib?: Omit<Contribution, 'id' | 'holdingId' | 'holdingKind'>) => void;
-  onSave?: (a: Partial<Asset>, contrib?: Omit<Contribution, 'id' | 'holdingId' | 'holdingKind'>) => void;
+  onAdd?: (a: Omit<Asset, 'id'>) => void;
+  onSave?: (a: Partial<Asset>) => void;
   initial?: Asset;
-  existingContrib?: Contribution;
 }) {
+  const { palette } = useUi();
   const [name, setName] = useState(initial?.name ?? '');
   const [type, setType] = useState<AssetType>(initial?.type ?? 'cash');
   const [value, setValue] = useState(initial ? String(initial.value) : '');
   const [liquid, setLiquid] = useState(initial?.liquid ?? true);
   const [date, setDate] = useState(initial?.date ?? todayISO());
-  const [contribType, setContribType] = useState<ContributionType>(existingContrib?.type ?? 'onetime');
-  const [contribAmount, setContribAmount] = useState(existingContrib ? String(existingContrib.amount) : '');
-  const [freq, setFreq] = useState<ContributionFreq>(existingContrib?.freq ?? 'monthly');
+  const [error, setError] = useState<string | null>(null);
 
   const submit = () => {
     const v = Number(value);
-    if (!name.trim() || !v) return;
+    if (!name.trim() || !v) { setError('Enter an asset name and a value greater than zero.'); return; }
+    if (!isValidIsoDate(date)) { setError('Use a valid date in YYYY-MM-DD format.'); return; }
+    setError(null);
     const fields = { name: name.trim(), type, value: v, liquid: type === 'cash' || type === 'bank' ? true : liquid, date };
-    const amt = Number(contribAmount);
-    const contrib: Omit<Contribution, 'id' | 'holdingId' | 'holdingKind'> | undefined = amt
-      ? { type: contribType, amount: amt, freq: contribType === 'recurring' ? freq : undefined, startDate: date, status: 'active' }
-      : undefined;
     if (initial && onSave) {
-      onSave(fields, contrib);
+      onSave(fields);
     } else {
-      onAdd?.({ ...fields, status: 'active' }, contrib);
-      setName(''); setValue(''); setLiquid(true); setDate(todayISO()); setContribAmount(''); setContribType('onetime'); setFreq('monthly');
+      onAdd?.(fields);
+      setName(''); setValue(''); setLiquid(true); setDate(todayISO());
       onClose();
     }
   };
@@ -264,26 +239,12 @@ function AssetSheet({
       <Field label="Date">
         <Input value={date} onChangeText={setDate} placeholder="YYYY-MM-DD" />
       </Field>
+      {error && <Text style={{ fontSize: 13, color: palette.danger }}>{error}</Text>}
       {type !== 'cash' && type !== 'bank' && (
         <Field label="Liquid?">
           <View style={styles.chipRow}>
             <Chip label="Liquid" selected={liquid} onPress={() => setLiquid(true)} />
             <Chip label="Illiquid" selected={!liquid} onPress={() => setLiquid(false)} />
-          </View>
-        </Field>
-      )}
-      <Field label="Contribution Type">
-        <View style={styles.chipRow}>
-          <Chip label="One-time (Lumpsum)" selected={contribType === 'onetime'} onPress={() => setContribType('onetime')} />
-          <Chip label="Recurring (SIP)" selected={contribType === 'recurring'} onPress={() => setContribType('recurring')} />
-        </View>
-      </Field>
-      {contribType === 'recurring' && (
-        <Field label="Frequency">
-          <View style={styles.chipRow}>
-            {(['weekly', 'monthly', 'quarterly'] as ContributionFreq[]).map((f) => (
-              <Chip key={f} label={f} selected={freq === f} onPress={() => setFreq(f)} />
-            ))}
           </View>
         </Field>
       )}
@@ -294,7 +255,7 @@ function AssetSheet({
 
 function InvestmentsTab() {
   const { data, palette, currency } = useUi();
-  const { addInvestment, addInvestmentWithContribution, updateInvestment, deleteInvestment, setInvestmentStatus, addContribution, updateContribution, deleteContribution } = useStore();
+  const { addInvestment, addInvestmentWithContribution, updateInvestment, deleteInvestment, setInvestmentStatus } = useStore();
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editingInvestment, setEditingInvestment] = useState<Investment | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Investment | null>(null);
@@ -357,9 +318,13 @@ function InvestmentsTab() {
                       <Text style={{ fontSize: 11, color: palette.textMuted }}>
                         {inv.type}{cagrValue !== null ? ` · CAGR ${formatPercent(cagrValue)}` : ' · CAGR N/A (SIP)'}{monthly > 0 ? ` · ${formatMoney(monthly, currency, { compact: true })}/mo SIP` : ''}
                       </Text>
-
-
-
+                      <LifecycleActions
+                        status={inv.status}
+                        onPause={() => setInvestmentStatus(inv.id, 'paused')}
+                        onResume={() => setInvestmentStatus(inv.id, 'active')}
+                        onClose={() => setInvestmentStatus(inv.id, 'closed')}
+                        onReopen={() => setInvestmentStatus(inv.id, 'active')}
+                      />
                     </View>
                     <View style={{ alignItems: 'flex-end' }}>
                       <Text style={{ fontSize: 14, fontWeight: '700', color: palette.text }}>{formatMoney(inv.currentValue, currency, { compact: true })}</Text>
@@ -381,17 +346,12 @@ function InvestmentsTab() {
 
       {editingInvestment && (
         <InvestmentEditSheet
+          key={editingInvestment.id}
           visible={!!editingInvestment}
           onClose={() => setEditingInvestment(null)}
           investment={editingInvestment}
-          existingContrib={data.contributions.find((c) => c.holdingId === editingInvestment.id)}
-          onSave={(fields, contrib) => {
+          onSave={(fields) => {
             updateInvestment(editingInvestment.id, fields);
-            const existing = data.contributions.find((c) => c.holdingId === editingInvestment.id);
-            if (contrib) {
-              if (existing) updateContribution(existing.id, contrib);
-              else addContribution({ ...contrib, holdingId: editingInvestment.id, holdingKind: 'investment' });
-            } else if (existing) deleteContribution(existing.id);
             setEditingInvestment(null);
           }}
         />
@@ -434,12 +394,11 @@ function InvestmentSheet({
   const [amount, setAmount] = useState('');
   const [freq, setFreq] = useState<ContributionFreq>('monthly');
   const [startDate, setStartDate] = useState(todayISO());
-  const [currentValue, setCurrentValue] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   const reset = () => {
     setStep(0); setName(''); setType('stocks'); setContribType('onetime');
-    setAmount(''); setFreq('monthly'); setStartDate(todayISO()); setCurrentValue(''); setError(null);
+    setAmount(''); setFreq('monthly'); setStartDate(todayISO()); setError(null);
   };
 
   const close = () => { reset(); onClose(); };
@@ -447,19 +406,19 @@ function InvestmentSheet({
   const next = () => {
     if (step === 0 && !name.trim()) { setError('Please enter a name.'); return; }
     if (step === 1 && !Number(amount)) { setError('Please enter an amount.'); return; }
+    if (step === 1 && !isValidIsoDate(startDate)) { setError('Use a valid date in YYYY-MM-DD format.'); return; }
     setError(null);
-    setStep((s) => s + 1);
+    if (step === 1) submit();
+    else setStep((s) => s + 1);
   };
 
   const submit = () => {
     const amt = Number(amount);
-    const cv = currentValue ? Number(currentValue) : amt;
-    if (!cv) { setError('Please enter a current value.'); return; }
     const inv: Omit<Investment, 'id'> = {
       name: name.trim(),
       type,
       purchaseValue: amt,
-      currentValue: cv,
+      currentValue: amt,
       purchaseDate: startDate,
       status: 'active',
     };
@@ -476,7 +435,7 @@ function InvestmentSheet({
     onClose();
   };
 
-  const stepLabels = ['Basic Info', 'Funding', 'Current Value'];
+  const stepLabels = ['Basic Info', 'Funding'];
 
   return (
     <Sheet visible={visible} onClose={close} title="Add Investment">
@@ -535,34 +494,18 @@ function InvestmentSheet({
           <View style={styles.stepNavRow}>
             <Button label="Back" variant="outline" onPress={() => setStep(0)} />
             <View style={{ width: 12 }} />
-            <Button label="Next" onPress={next} />
+            <Button label="Add Investment" onPress={next} />
           </View>
         </View>
       )}
 
-      {step === 2 && (
-        <View style={{ gap: 12 }}>
-          <Text style={{ fontSize: 13, color: palette.textMuted }}>
-            Enter the current market value of this holding. Leave blank to use the contribution amount ({amount || '0'}) — you can update it later as the market value changes.
-          </Text>
-          <Field label="Current Value">
-            <Input value={currentValue} onChangeText={(t) => { setCurrentValue(t.replace(/[^0-9.]/g, '')); setError(null); }} keyboardType="numeric" placeholder={amount || '0'} />
-          </Field>
-          {error && <Text style={{ fontSize: 13, color: palette.danger }}>{error}</Text>}
-          <View style={styles.stepNavRow}>
-            <Button label="Back" variant="outline" onPress={() => setStep(1)} />
-            <View style={{ width: 12 }} />
-            <Button label="Add Investment" onPress={submit} />
-          </View>
-        </View>
-      )}
     </Sheet>
   );
 }
 
 function DebtsTab() {
   const { data, palette, currency } = useUi();
-  const { addDebt, updateDebt, deleteDebt, addContribution } = useStore();
+  const { addDebt, updateDebt, deleteDebt, addContribution, updateContribution, deleteContribution, setDebtStatus, setContributionStatus } = useStore();
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editingDebt, setEditingDebt] = useState<Debt | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Debt | null>(null);
@@ -571,6 +514,13 @@ function DebtsTab() {
   const monthly = monthlyDebtPayments(data.debts);
 
   const grouped = useMemo(() => groupByPeriod(data.debts, period), [data.debts, period]);
+
+  const setDebtLifecycle = (debt: Debt, status: Debt['status']) => {
+    setDebtStatus(debt.id, status);
+    data.contributions
+      .filter((contribution) => contribution.holdingId === debt.id)
+      .forEach((contribution) => setContributionStatus(contribution.id, status));
+  };
 
   return (
     <View style={{ gap: 14 }}>
@@ -608,7 +558,13 @@ function DebtsTab() {
                         <StatusBadge status={d.status} />
                       </View>
                       <Text style={{ fontSize: 11, color: palette.textMuted }}>{d.type} · {d.interestRate}% · {d.status === 'closed' ? 'paid off' : months === Infinity ? 'EMI below interest' : `${months} mo left`}{d.closedDate ? ` · ${d.closedDate}` : ''}</Text>
-
+                      <LifecycleActions
+                        status={d.status}
+                        onPause={() => setDebtLifecycle(d, 'paused')}
+                        onResume={() => setDebtLifecycle(d, 'active')}
+                        onClose={() => setDebtLifecycle(d, 'closed')}
+                        onReopen={() => setDebtLifecycle(d, 'active')}
+                      />
                     </View>
                     <View style={{ alignItems: 'flex-end' }}>
                       <Text style={{ fontSize: 14, fontWeight: '700', color: palette.text }}>{formatMoney(d.outstanding, currency, { compact: true })}</Text>
@@ -642,10 +598,31 @@ function DebtsTab() {
       />
       {editingDebt && (
         <DebtSheet
+          key={editingDebt.id}
           visible={!!editingDebt}
           onClose={() => setEditingDebt(null)}
           initial={editingDebt}
-          onSave={(fields) => { updateDebt(editingDebt.id, fields); setEditingDebt(null); }}
+          onSave={(fields) => {
+            updateDebt(editingDebt.id, fields);
+            const emiContribution = data.contributions.find((contribution) => contribution.holdingId === editingDebt.id && contribution.holdingKind === 'debt' && contribution.type === 'recurring');
+            if (fields.emi && fields.emi > 0) {
+              const contributionFields = {
+                holdingKind: 'debt' as const,
+                type: 'recurring' as const,
+                amount: fields.emi,
+                freq: 'monthly' as const,
+                startDate: fields.date || editingDebt.date,
+                status: emiContribution?.status ?? editingDebt.status,
+                pausedDate: emiContribution?.pausedDate,
+                closedDate: emiContribution?.closedDate,
+              };
+              if (emiContribution) updateContribution(emiContribution.id, contributionFields);
+              else addContribution({ ...contributionFields, holdingId: editingDebt.id });
+            } else if (emiContribution) {
+              deleteContribution(emiContribution.id);
+            }
+            setEditingDebt(null);
+          }}
         />
       )}
       {pendingDelete && (
@@ -694,6 +671,7 @@ function DebtSheet({
   onSave?: (d: Partial<Debt>) => void;
   initial?: Debt;
 }) {
+  const { palette } = useUi();
   const [name, setName] = useState(initial?.name ?? '');
   const [type, setType] = useState<DebtType>(initial?.type ?? 'loan');
   const [outstanding, setOutstanding] = useState(initial ? String(initial.outstanding) : '');
@@ -701,13 +679,16 @@ function DebtSheet({
   const [emi, setEmi] = useState(initial ? String(initial.emi) : '');
   const [tenureMonths, setTenureMonths] = useState(initial ? String(initial.tenureMonths) : '');
   const [date, setDate] = useState(initial?.date ?? todayISO());
+  const [error, setError] = useState<string | null>(null);
 
   const submit = () => {
     const o = Number(outstanding);
     const r = Number(interestRate);
     const e = Number(emi);
     const t = Number(tenureMonths);
-    if (!name.trim() || !o) return;
+    if (!name.trim() || !o || r < 0 || e < 0 || t < 0) { setError('Enter a name, outstanding balance, and valid non-negative values.'); return; }
+    if (!isValidIsoDate(date)) { setError('Use a valid date in YYYY-MM-DD format.'); return; }
+    setError(null);
     const fields = { name: name.trim(), type, outstanding: o, interestRate: r, emi: e, tenureMonths: t, date };
     if (initial && onSave) { onSave(fields); }
     else { onAdd?.({ ...fields, status: 'active' }); setName(''); setOutstanding(''); setInterestRate(''); setEmi(''); setTenureMonths(''); setDate(todayISO()); onClose(); }
@@ -742,19 +723,19 @@ function DebtSheet({
       <Field label="Date">
         <Input value={date} onChangeText={setDate} placeholder="YYYY-MM-DD" />
       </Field>
+      {error && <Text style={{ fontSize: 13, color: palette.danger }}>{error}</Text>}
       <Button label={initial ? 'Save' : 'Add Debt'} onPress={submit} style={{ marginTop: 8 }} />
     </Sheet>
   );
 }
 
 function InvestmentEditSheet({
-  visible, onClose, investment, existingContrib, onSave,
+  visible, onClose, investment, onSave,
 }: {
   visible: boolean;
   onClose: () => void;
   investment: Investment;
-  existingContrib?: Contribution;
-  onSave: (i: Partial<Investment>, contrib?: Omit<Contribution, 'id' | 'holdingId' | 'holdingKind'>) => void;
+  onSave: (i: Partial<Investment>) => void;
 }) {
   const { palette } = useUi();
   const [name, setName] = useState(investment.name);
@@ -762,19 +743,15 @@ function InvestmentEditSheet({
   const [currentValue, setCurrentValue] = useState(String(investment.currentValue));
   const [purchaseValue, setPurchaseValue] = useState(String(investment.purchaseValue));
   const [purchaseDate, setPurchaseDate] = useState(investment.purchaseDate);
-  const [contribType, setContribType] = useState<ContributionType>(existingContrib?.type ?? 'onetime');
-  const [contribAmount, setContribAmount] = useState(existingContrib ? String(existingContrib.amount) : '');
-  const [freq, setFreq] = useState<ContributionFreq>(existingContrib?.freq ?? 'monthly');
+  const [error, setError] = useState<string | null>(null);
 
   const submit = () => {
     const cv = Number(currentValue);
     const pv = Number(purchaseValue);
-    if (!name.trim() || !cv) return;
-    const amt = Number(contribAmount);
-    const contrib: Omit<Contribution, 'id' | 'holdingId' | 'holdingKind'> | undefined = amt
-      ? { type: contribType, amount: amt, freq: contribType === 'recurring' ? freq : undefined, startDate: purchaseDate, status: 'active' }
-      : undefined;
-    onSave({ name: name.trim(), type, currentValue: cv, purchaseValue: pv, purchaseDate }, contrib);
+    if (!name.trim() || cv <= 0 || pv <= 0) { setError('Enter a name and values greater than zero.'); return; }
+    if (!isValidIsoDate(purchaseDate)) { setError('Use a valid date in YYYY-MM-DD format.'); return; }
+    setError(null);
+    onSave({ name: name.trim(), type, currentValue: cv, purchaseValue: pv, purchaseDate });
   };
 
   return (
@@ -798,24 +775,7 @@ function InvestmentEditSheet({
       <Field label="Purchase Date">
         <Input value={purchaseDate} onChangeText={setPurchaseDate} placeholder="YYYY-MM-DD" />
       </Field>
-      <Field label="Contribution Type">
-        <View style={styles.chipRow}>
-          <Chip label="One-time (Lumpsum)" selected={contribType === 'onetime'} onPress={() => setContribType('onetime')} />
-          <Chip label="Recurring (SIP)" selected={contribType === 'recurring'} onPress={() => setContribType('recurring')} />
-        </View>
-      </Field>
-      <Field label={contribType === 'onetime' ? 'Contribution Amount (optional)' : 'Recurring Amount'}>
-        <Input value={contribAmount} onChangeText={(t) => setContribAmount(t.replace(/[^0-9.]/g, ''))} keyboardType="numeric" placeholder="0" />
-      </Field>
-      {contribType === 'recurring' && (
-        <Field label="Frequency">
-          <View style={styles.chipRow}>
-            {(['weekly', 'monthly', 'quarterly'] as ContributionFreq[]).map((f) => (
-              <Chip key={f} label={f} selected={freq === f} onPress={() => setFreq(f)} />
-            ))}
-          </View>
-        </Field>
-      )}
+      {error && <Text style={{ fontSize: 13, color: palette.danger }}>{error}</Text>}
       <Button label="Save" onPress={submit} style={{ marginTop: 8 }} />
     </Sheet>
   );
@@ -825,6 +785,7 @@ function AllocationTab() {
   const { data, palette, currency } = useUi();
   const { setAllocationTargets } = useStore();
   const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<AllocationTarget | null>(null);
 
   const actual = useMemo(() => actualAllocation(data.investments, data.assets), [data]);
   const age = data.settings.age;
@@ -833,14 +794,24 @@ function AllocationTab() {
   const target: AllocationTarget | null = data.settings.allocationTargets || band;
   const drift = target ? allocationDrift(actual, target) : [];
 
-  const keys: (keyof AllocationTarget)[] = ['stocks', 'mutualfund', 'fd', 'ppf', 'gold', 'crypto', 'other'];
+  const keys: Exclude<keyof AllocationTarget, 'custom'>[] = ['stocks', 'mutualfund', 'fd', 'ppf', 'gold', 'crypto', 'other'];
+  const draftTotal = draft ? keys.reduce((sum, key) => sum + draft[key], 0) : 0;
+  const startEditing = () => {
+    if (target) setDraft({ ...target, custom: true });
+    setEditing(true);
+  };
+  const saveTarget = () => {
+    if (!draft || Math.abs(draftTotal - 1) > 0.001) return;
+    setAllocationTargets(draft);
+    setEditing(false);
+  };
 
   return (
     <View style={{ gap: 14 }}>
       <Card>
         <SectionTitle title="Actual vs. Target" action={
-          <Pressable onPress={() => setEditing((e) => !e)}>
-            <Text style={{ fontSize: 12, color: palette.primary, fontWeight: '600' }}>{editing ? 'Done' : 'Edit Target'}</Text>
+          <Pressable onPress={editing ? () => setEditing(false) : startEditing}>
+            <Text style={{ fontSize: 12, color: palette.primary, fontWeight: '600' }}>{editing ? 'Cancel' : 'Edit Target'}</Text>
           </Pressable>
         } />
         <View style={styles.donutRow}>
@@ -855,22 +826,26 @@ function AllocationTab() {
         </View>
       </Card>
 
-      {editing && target && (
+      {editing && draft && (
         <Card>
           <SectionTitle title="Edit Target Allocation" />
           {keys.map((k) => (
             <Field key={k} label={k}>
               <Input
-                defaultValue={String(Math.round((target![k] as number) * 100))}
+                value={String(Math.round(draft[k] * 100))}
                 onChangeText={(t) => {
-                  const v = Number(t.replace(/[^0-9]/g, '')) / 100;
-                  setAllocationTargets({ ...target!, [k]: v, custom: true });
+                  const value = Math.min(100, Number(t.replace(/[^0-9]/g, '')) || 0) / 100;
+                  setDraft((current) => current ? { ...current, [k]: value, custom: true } : current);
                 }}
                 keyboardType="numeric"
               />
             </Field>
           ))}
           <Text style={{ fontSize: 11, color: palette.textMuted, marginTop: 4 }}>Values are percentages (0–100).</Text>
+          <Text style={{ fontSize: 11, color: Math.abs(draftTotal - 1) < 0.001 ? palette.success : palette.danger, marginTop: 4 }}>
+            Total: {formatPercent(draftTotal, 0)} {Math.abs(draftTotal - 1) < 0.001 ? 'ready to save' : 'must equal 100%'}
+          </Text>
+          <Button label="Save Target" onPress={saveTarget} disabled={Math.abs(draftTotal - 1) > 0.001} style={{ marginTop: 12 }} />
         </Card>
       )}
 
@@ -878,7 +853,7 @@ function AllocationTab() {
         <Card>
           <SectionTitle title="Drift & Rebalancing" />
           {drift.map((d) => {
-            const investTotal = totalInvestments(data.investments) + data.assets.filter((a) => a.status !== 'closed' && a.type === 'gold').reduce((s, a) => s + a.value, 0);
+            const investTotal = totalInvestments(data.investments) + data.assets.filter((a) => a.type === 'gold').reduce((s, a) => s + a.value, 0);
             const shiftAmt = d.drift * investTotal;
             return (
               <View key={d.type} style={styles.driftRow}>

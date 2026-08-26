@@ -1,13 +1,11 @@
 import React, { useMemo, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, SafeAreaView } from 'react-native';
 import { Card, SectionTitle, useUi, Chip, RiskBadge, EmptyState } from '@/components/ui';
-import { LineChart, BarChart, DonutChart, Gauge, ProgressBar } from '@/components/charts';
-import { useStore } from '@/lib/store';
+import { BarChart, DonutChart, Gauge } from '@/components/charts';
 import {
   computeTotals,
   computeRatios,
   monthKey,
-  netWorth,
   totalAssets,
   totalInvestments,
   totalDebt,
@@ -20,7 +18,7 @@ import {
   recurringTransactionsThrough,
 } from '@/lib/calc';
 import { formatMoney, formatPercent, todayISO, monthLabel } from '@/lib/format';
-import { TrendingUp, Wallet, Shield, AlertTriangle } from 'lucide-react-native';
+import { TrendingUp, Shield } from 'lucide-react-native';
 
 export default function DashboardScreen() {
   const { data, palette, currency } = useUi();
@@ -80,7 +78,7 @@ export default function DashboardScreen() {
 
   const assetTypeBreakdown = useMemo(() => {
     const map: Record<string, number> = {};
-    data.assets.filter((a) => a.status !== 'closed').forEach((a) => { map[a.type] = (map[a.type] || 0) + a.value; });
+    data.assets.forEach((a) => { map[a.type] = (map[a.type] || 0) + a.value; });
     return Object.entries(map).map(([type, value]) => ({ type, value })).sort((a, b) => b.value - a.value);
   }, [data]);
 
@@ -91,6 +89,23 @@ export default function DashboardScreen() {
   }, [data]);
 
   const hasData = data.transactions.length > 0 || assets > 0 || invest > 0 || debt > 0;
+  const periodLabel = period === 'monthly' ? 'this month' : 'this year';
+  const periodSavingsCoverage = totals.expenses > 0
+    ? totals.savings / totals.expenses
+    : (totals.savings > 0 ? Infinity : 0);
+
+  if (!hasData) {
+    return (
+      <SafeAreaView style={[styles.container, { backgroundColor: palette.bg }]}>
+        <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+          <Text style={[styles.hello, { color: palette.textMuted }]}>Your finances at a glance</Text>
+          <Card style={styles.emptyDashboardCard}>
+            <EmptyState title="Start building your dashboard" subtitle="Add income or expenses in Transactions, then add assets, investments, or debts to see your financial picture here." />
+          </Card>
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: palette.bg }]}>
@@ -125,9 +140,9 @@ export default function DashboardScreen() {
         <View style={styles.row2}>
           <Card style={styles.halfCard}>
             <Text style={[styles.cardTitle, { color: palette.textMuted }]}>Savings Rate</Text>
-            <Gauge value={totals.savingsRate} color={palette.primary} />
+            <Gauge value={totals.savingsRate} color={palette.primary} size={112} />
             <Text style={[styles.cardFoot, { color: palette.text }]}>
-              {formatMoney(totals.savings, currency, { compact: true })} saved this {period === 'monthly' ? 'month' : 'year'}
+              {formatMoney(totals.savings, currency, { compact: true })} saved {periodLabel}
             </Text>
           </Card>
           <Card style={styles.halfCard}>
@@ -157,7 +172,7 @@ export default function DashboardScreen() {
 
         {/* Income vs Expense trend */}
         <Card>
-          <SectionTitle title="Income vs Expense" />
+          <SectionTitle title="Income vs Expense — Last 6 Months" />
           <BarChart data={trend.map((t) => ({ label: t.label, value: t.value }))} data2={trend.map((t) => ({ label: t.label, value: t.value2 }))} />
           <View style={styles.legendRow}>
             <Legend color={palette.primary} label="Income" />
@@ -169,7 +184,7 @@ export default function DashboardScreen() {
         <Card>
           <SectionTitle title="Ratio Health Scorecard" />
           <View style={styles.scorecard}>
-            <ScoreRow label="Savings Rate" value={formatPercent(ratios.savingsRate)} zone={ratios.savingsRate >= 0.2 ? 'green' : ratios.savingsRate >= 0.1 ? 'yellow' : 'red'} />
+            <ScoreRow label={`Savings Rate (${period === 'monthly' ? 'month' : 'year'})`} value={formatPercent(totals.savingsRate)} zone={totals.savingsRate >= 0.2 ? 'green' : totals.savingsRate >= 0.1 ? 'yellow' : 'red'} />
             <ScoreRow
               label="Debt Service"
               value={!isFinite(ratios.debtServiceRatio) ? 'N/A' : formatPercent(ratios.debtServiceRatio)}
@@ -183,7 +198,7 @@ export default function DashboardScreen() {
               note={!isFinite(ratios.debtToAsset) ? 'debt with no assets' : undefined}
             />
             <ScoreRow label="Liquidity" value={formatPercent(ratios.liquidityRatio)} zone={ratios.liquidityRatio >= 0.15 ? 'green' : ratios.liquidityRatio >= 0.05 ? 'yellow' : 'red'} />
-            <ScoreRow label="Savings Coverage" value={!isFinite(ratios.savingsCoverage) ? '∞x' : `${ratios.savingsCoverage.toFixed(2)}x`} zone={ratios.savingsCoverage >= 0.2 ? 'green' : ratios.savingsCoverage >= 0.1 ? 'yellow' : 'red'} />
+            <ScoreRow label={`Savings Coverage (${period === 'monthly' ? 'month' : 'year'})`} value={!isFinite(periodSavingsCoverage) ? '∞x' : `${periodSavingsCoverage.toFixed(2)}x`} zone={periodSavingsCoverage >= 0.2 ? 'green' : periodSavingsCoverage >= 0.1 ? 'yellow' : 'red'} />
             {lifeInfl && (
               <ScoreRow
                 label="Lifestyle Inflation"
@@ -196,7 +211,7 @@ export default function DashboardScreen() {
         </Card>
 
         {/* Asset allocation */}
-        {invest > 0 || data.assets.some((asset) => asset.status !== 'closed' && asset.type === 'gold') ? (
+        {invest > 0 || data.assets.some((asset) => asset.type === 'gold') ? (
           <Card>
             <SectionTitle title="Asset Allocation" action={bandLabel ? <Text style={[styles.bandTag, { color: palette.textMuted }]}>Target: {bandLabel}</Text> : undefined} />
             <DonutChart
@@ -303,9 +318,6 @@ export default function DashboardScreen() {
           </Card>
         )}
 
-        {!hasData && (
-          <EmptyState title="No data yet" subtitle="Add your first income, expense, asset, or debt to see your dashboard come alive." />
-        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -352,12 +364,12 @@ const styles = StyleSheet.create({
   netLabel: { fontSize: 13, fontWeight: '600' },
   netValue: { fontSize: 32, fontWeight: '800', marginTop: 4 },
   netBadge: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
-  netBreakdown: { flexDirection: 'row', gap: 20, marginTop: 16 },
-  bdItem: { gap: 2 },
+  netBreakdown: { flexDirection: 'row', gap: 12, marginTop: 16 },
+  bdItem: { flex: 1, minWidth: 0, gap: 2 },
   bdDot: { width: 8, height: 8, borderRadius: 4 },
   toggleRow: { flexDirection: 'row', gap: 8 },
   row2: { flexDirection: 'row', gap: 12 },
-  halfCard: { flex: 1, alignItems: 'center', gap: 8 },
+  halfCard: { flex: 1, minWidth: 0, alignItems: 'center', gap: 8 },
   cardTitle: { fontSize: 13, fontWeight: '600' },
   cardFoot: { fontSize: 12, textAlign: 'center' },
   emergency: { alignItems: 'center', gap: 2, marginVertical: 8 },
@@ -374,4 +386,5 @@ const styles = StyleSheet.create({
   driftRow: { flexDirection: 'row', justifyContent: 'space-between' },
   driftType: { fontSize: 12, textTransform: 'capitalize' },
   driftVal: { fontSize: 12, fontWeight: '600' },
+  emptyDashboardCard: { marginTop: 10 },
 });
