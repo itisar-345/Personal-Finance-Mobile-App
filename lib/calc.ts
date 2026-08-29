@@ -8,6 +8,7 @@ import type {
   Contribution,
   ContributionFreq,
   AllocationTarget,
+  AllocationKey,
 } from './types';
 
 /** Items that are active or paused count toward current totals; closed items are historical only. */
@@ -413,6 +414,36 @@ export function actualAllocation(
   };
 }
 
+export const ALLOCATION_KEYS: AllocationKey[] = [
+  'stocks',
+  'mutualfund',
+  'fd',
+  'ppf',
+  'gold',
+  'crypto',
+  'other',
+];
+
+export function allocationTargetEntries(target?: AllocationTarget | null) {
+  const entries: Array<{ id: string; key?: AllocationKey; name: string; value: number }> = [];
+  for (const key of ALLOCATION_KEYS) {
+    entries.push({
+      id: key,
+      key,
+      name: key.replace(/([A-Z])/g, ' $1').replace(/^./, (s) => s.toUpperCase()).trim(),
+      value: Number(target?.[key] ?? 0),
+    });
+  }
+  for (const custom of target?.customTargets ?? []) {
+    entries.push({
+      id: custom.id,
+      name: custom.name || 'Custom Target',
+      value: Number(custom.value ?? 0),
+    });
+  }
+  return entries;
+}
+
 export function allocationDrift(actual: ActualAllocation, target: AllocationTarget) {
   const keys: (keyof ActualAllocation)[] = [
     'stocks',
@@ -448,6 +479,169 @@ export function debtStrategies(debts: Debt[]) {
   const snowball = [...open].sort((a, b) => a.outstanding - b.outstanding);
   const avalanche = [...open].sort((a, b) => b.interestRate - a.interestRate);
   return { snowball, avalanche };
+}
+
+export type DebtStrategyName = 'snowball' | 'avalanche';
+
+export interface DebtStrategySimulation {
+  strategy: DebtStrategyName;
+  order: Debt[];
+  months: number;
+  totalInterest: number;
+  monthlyCashAvailable: number;
+  payoffOrder: string[];
+}
+
+/**
+ * Simulate a debt payoff plan using the requested rules:
+ *  - Sort by smallest balance for Snowball or highest interest for Avalanche.
+ *  - Pay minimums on all debts each month.
+ *  - Apply any remaining monthly cash to the top-priority debt.
+ *  - If the top priority debt is paid off, its minimum payment rolls into next month's extra cash.
+ */
+export function simulateDebtStrategy(
+  debts: Debt[],
+  monthlyCashAvailable: number,
+  strategy: DebtStrategyName,
+): DebtStrategySimulation {
+  const active = debts.filter(countsNow).map((debt) => ({
+    ...debt,
+    balance: debt.outstanding,
+  }));
+
+  if (active.length === 0) {
+    return {
+      strategy,
+      order: [],
+      months: 0,
+      totalInterest: 0,
+      monthlyCashAvailable,
+      payoffOrder: [],
+    };
+  }
+
+  let current = active;
+  let months = 0;
+  let totalInterest = 0;
+  let extraCash = monthlyCashAvailable;
+
+  while (current.some((debt) => debt.balance > 0.001) && months < 1200) {
+    months += 1;
+    current = [...current].sort((a, b) => (strategy === 'snowball'
+      ? a.balance - b.balance
+      : b.interestRate - a.interestRate));
+
+    let remainingCash = extraCash;
+    const paidOff: Array<{ debt: Debt; amount: number }> = [];
+
+    for (const debt of current) {
+      if (debt.balance <= 0.001) continue;
+      const monthlyInterest = debt.balance * (debt.interestRate / 100 / 12);
+      totalInterest += monthlyInterest;
+      debt.balance += monthlyInterest;
+
+      const minimumPayment = Math.min(debt.emi, debt.balance);
+      debt.balance = Math.max(0, debt.balance - minimumPayment);
+      remainingCash = Math.max(0, remainingCash - minimumPayment);
+
+      if (debt.balance <= 0.001) {
+        paidOff.push({ debt: { ...debt }, amount: minimumPayment });
+      }
+    }
+
+    const topPriority = current.find((debt) => debt.balance > 0.001);
+    if (topPriority && remainingCash > 0) {
+      topPriority.balance = Math.max(0, topPriority.balance - remainingCash);
+      remainingCash = 0;
+    }
+
+    const nextCurrent = current
+      .filter((debt) => debt.balance > 0.001)
+      .map((debt) => ({ ...debt }));
+
+    if (paidOff.length > 0) {
+      const freed = paidOff.reduce((sum, item) => sum + item.amount, 0);
+      extraCash = Math.max(0, remainingCash + freed);
+    } else {
+      extraCash = Math.max(0, remainingCash);
+    }
+
+    current = nextCurrent;
+    if (current.length === 0) break;
+  }
+
+  return {
+    strategy,
+    order: current.map((debt) => ({
+      ...debt,
+      outstanding: debt.balance,
+      status: debt.status,
+    })),
+    months,
+    totalInterest,
+    monthlyCashAvailable,
+    payoffOrder: current.map((debt) => debt.name),
+  };
+}
+
+export interface DebtStrategyPlanItem {
+  debt: Debt;
+  months: number;
+  cumulativeMonths: number;
+}
+
+export interface DebtStrategyPlan {
+  items: DebtStrategyPlanItem[];
+  totalMonths: number;
+  totalInterest: number;
+}
+
+/** Project a payoff order using all minimum payments, rolling paid-off payments into the target debt. */
+export function debtStrategyPlan(order: Debt[]): DebtStrategyPlan {
+  const balances = new Map(order.map((debt) => [debt.id, Math.max(0, debt.outstanding)]));
+  const payoffMonths = new Map<string, number>();
+  const monthlyBudget = order.reduce((sum, debt) => sum + Math.max(0, debt.emi), 0);
+  let totalInterest = 0;
+
+  if (balances.size > 0 && monthlyBudget > 0) {
+    for (let month = 1; month <= 1200 && balances.size > 0; month++) {
+      const target = order.find((debt) => balances.has(debt.id));
+      if (!target) break;
+      let available = monthlyBudget;
+
+      for (const debt of order) {
+        const balance = balances.get(debt.id);
+        if (balance === undefined) continue;
+        const interest = balance * (debt.interestRate / 100 / 12);
+        const balanceWithInterest = balance + interest;
+        balances.set(debt.id, balanceWithInterest);
+        totalInterest += interest;
+        if (debt.id !== target.id) {
+          const minimum = Math.min(debt.emi, balanceWithInterest);
+          balances.set(debt.id, balanceWithInterest - minimum);
+          available -= minimum;
+        }
+      }
+
+      const targetBalance = balances.get(target.id)!;
+      balances.set(target.id, targetBalance - Math.min(Math.max(0, available), targetBalance));
+      if (balances.get(target.id)! <= 0.005) {
+        balances.delete(target.id);
+        payoffMonths.set(target.id, month);
+      }
+    }
+  }
+
+  const items = order.map((debt) => ({
+    debt,
+    months: payoffMonths.get(debt.id) ?? Infinity,
+    cumulativeMonths: payoffMonths.get(debt.id) ?? Infinity,
+  }));
+  return {
+    items,
+    totalMonths: items.length === 0 ? 0 : items[items.length - 1].cumulativeMonths,
+    totalInterest: balances.size > 0 ? Infinity : totalInterest,
+  };
 }
 
 /** Average monthly expenses over the trailing 6 months ending at refDate (inclusive).

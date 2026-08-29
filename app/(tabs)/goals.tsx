@@ -12,6 +12,7 @@ import {
   netWorth,
   debtStrategies,
   debtPayoffMonths,
+  debtStrategyPlan,
   avgMonthlyExpenses,
   recurringTransactionsThrough,
 } from '@/lib/calc';
@@ -301,17 +302,8 @@ function DebtPlannerTab() {
     return <EmptyState title="No debts to plan" subtitle="Add debts in the Assets tab to see payoff strategies." />;
   }
 
-  const totalMonths = (order: typeof snowball) => {
-    let cumulative = 0;
-    return order.map((d) => {
-      const m = debtPayoffMonths(d);
-      cumulative += m;
-      return { name: d.name, months: m, cumulative };
-    });
-  };
-
-  const snowballPlan = totalMonths(snowball);
-  const avalanchePlan = totalMonths(avalanche);
+  const snowballPlan = debtStrategyPlan(snowball);
+  const avalanchePlan = debtStrategyPlan(avalanche);
 
   return (
     <View style={{ gap: 14 }}>
@@ -321,29 +313,31 @@ function DebtPlannerTab() {
           Compare two payoff strategies side by side.
         </Text>
         <View style={styles.strategyCompare}>
-          <View style={{ flex: 1 }}>
+          <View style={{ flex: 1, minWidth: 0 }}>
             <Text style={{ fontSize: 13, fontWeight: '700', color: palette.text }}>Snowball</Text>
             <Text style={{ fontSize: 11, color: palette.textMuted, marginBottom: 4 }}>Smallest balance first</Text>
-            {snowballPlan.map((p, i) => (
-              <Text key={i} style={{ fontSize: 11, color: palette.textMuted }}>
-                {i + 1}. {p.name} — {p.months === Infinity ? 'Never (EMI < interest)' : `${p.months} mo`}
+            {snowballPlan.items.map((p, i) => (
+              <Text key={p.debt.id} style={{ fontSize: 11, color: palette.textMuted }}>
+                {i + 1}. {p.debt.name} — {p.months === Infinity ? 'Not reachable' : `${p.months} mo`}
               </Text>
             ))}
             <Text style={{ fontSize: 12, fontWeight: '700', color: palette.primary, marginTop: 6 }}>
-              Total: ~{snowballPlan[snowballPlan.length - 1]?.cumulative === Infinity ? 'N/A' : `${snowballPlan[snowballPlan.length - 1]?.cumulative} mo`}
+              Total: {snowballPlan.totalMonths === Infinity ? 'Not reachable' : `${snowballPlan.totalMonths} mo`}
             </Text>
+            <Text style={{ fontSize: 11, color: palette.textMuted }}>Interest: {snowballPlan.totalInterest === Infinity ? 'Not reachable' : formatMoney(snowballPlan.totalInterest, currency, { compact: true })}</Text>
           </View>
-          <View style={{ flex: 1 }}>
+          <View style={{ flex: 1, minWidth: 0 }}>
             <Text style={{ fontSize: 13, fontWeight: '700', color: palette.text }}>Avalanche</Text>
             <Text style={{ fontSize: 11, color: palette.textMuted, marginBottom: 4 }}>Highest interest first</Text>
-            {avalanchePlan.map((p, i) => (
-              <Text key={i} style={{ fontSize: 11, color: palette.textMuted }}>
-                {i + 1}. {p.name} — {p.months === Infinity ? 'Never (EMI < interest)' : `${p.months} mo`}
+            {avalanchePlan.items.map((p, i) => (
+              <Text key={p.debt.id} style={{ fontSize: 11, color: palette.textMuted }}>
+                {i + 1}. {p.debt.name} — {p.months === Infinity ? 'Not reachable' : `${p.months} mo`}
               </Text>
             ))}
             <Text style={{ fontSize: 12, fontWeight: '700', color: palette.primary, marginTop: 6 }}>
-              Total: ~{avalanchePlan[avalanchePlan.length - 1]?.cumulative === Infinity ? 'N/A' : `${avalanchePlan[avalanchePlan.length - 1]?.cumulative} mo`}
+              Total: {avalanchePlan.totalMonths === Infinity ? 'Not reachable' : `${avalanchePlan.totalMonths} mo`}
             </Text>
+            <Text style={{ fontSize: 11, color: palette.textMuted }}>Interest: {avalanchePlan.totalInterest === Infinity ? 'Not reachable' : formatMoney(avalanchePlan.totalInterest, currency, { compact: true })}</Text>
           </View>
         </View>
       </Card>

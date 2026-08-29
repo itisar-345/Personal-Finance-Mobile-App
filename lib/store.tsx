@@ -26,6 +26,7 @@ interface StoreContextValue {
   deleteTransaction: (id: string) => void;
   // categories
   addCategory: (c: Omit<Category, 'id'>) => void;
+  updateCategory: (id: string, c: Partial<Category>) => void;
   deleteCategory: (id: string) => void;
   // assets
   addAsset: (a: Omit<Asset, 'id'>) => string;
@@ -64,6 +65,54 @@ interface StoreContextValue {
 
 const StoreContext = createContext<StoreContextValue | null>(null);
 
+function todayISO(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function normalizeData(input?: Partial<AppData> | null): AppData {
+  const settings: Partial<Settings> = input?.settings ?? {};
+  const date = todayISO();
+
+  return {
+    transactions: Array.isArray(input?.transactions)
+      ? input.transactions.map((transaction) => ({
+        ...transaction,
+        recurring: transaction.recurring || 'none',
+        status: transaction.status || 'active',
+      }))
+      : [],
+    categories: Array.isArray(input?.categories) ? input.categories : DEFAULT_DATA.categories,
+    assets: Array.isArray(input?.assets)
+      ? input.assets.map((asset) => ({
+        ...asset,
+        date: asset.date || date,
+        liquid: asset.liquid ?? (asset.type === 'cash' || asset.type === 'bank'),
+      }))
+      : [],
+    investments: Array.isArray(input?.investments)
+      ? input.investments.map((investment) => ({ ...investment, status: investment.status || 'active' }))
+      : [],
+    debts: Array.isArray(input?.debts)
+      ? input.debts.map((debt) => ({ ...debt, status: debt.status || 'active', date: debt.date || date }))
+      : [],
+    goals: Array.isArray(input?.goals)
+      ? input.goals.map((goal) => ({ ...goal, monthlyContribution: goal.monthlyContribution ?? 0 }))
+      : [],
+    contributions: Array.isArray(input?.contributions)
+      ? input.contributions.map((contribution) => ({
+        ...contribution,
+        status: contribution.status || 'active',
+        startDate: contribution.startDate || date,
+      }))
+      : [],
+    settings: {
+      ...DEFAULT_DATA.settings,
+      ...settings,
+      currencies: Array.isArray(settings.currencies) ? settings.currencies : DEFAULT_DATA.settings.currencies,
+    },
+  };
+}
+
 export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [data, setData] = useState<AppData>(DEFAULT_DATA);
   const [ready, setReady] = useState(false);
@@ -72,11 +121,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     (async () => {
       const parsed = await readData<AppData>();
       if (parsed) {
-        setData({
-          ...DEFAULT_DATA,
-          ...parsed,
-          settings: { ...DEFAULT_DATA.settings, ...parsed.settings },
-        });
+        setData(normalizeData(parsed));
       }
       setReady(true);
     })();
@@ -123,9 +168,25 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
+  const updateCategory = useCallback((id: string, c: Partial<Category>) => {
+    setData((prev) => {
+      const next = { ...prev, categories: prev.categories.map((x) => (x.id === id ? { ...x, ...c } : x)) };
+      save(next);
+      return next;
+    });
+  }, []);
+
   const deleteCategory = useCallback((id: string) => {
     setData((prev) => {
-      const next = { ...prev, categories: prev.categories.filter((x) => x.id !== id) };
+      const category = prev.categories.find((x) => x.id === id);
+      const fallback = prev.categories.find((x) => x.id !== id && x.type === category?.type);
+      const next = {
+        ...prev,
+        categories: prev.categories.filter((x) => x.id !== id),
+        transactions: fallback
+          ? prev.transactions.map((transaction) => transaction.categoryId === id ? { ...transaction, categoryId: fallback.id } : transaction)
+          : prev.transactions,
+      };
       save(next);
       return next;
     });
@@ -214,7 +275,23 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const addDebt = useCallback((d: Omit<Debt, 'id'>): string => {
     const id = genId('dbt');
     setData((prev) => {
-      const next = { ...prev, debts: [...prev.debts, { ...d, id, status: d.status || 'active', date: d.date || new Date().toISOString().slice(0, 10) }] };
+      const debt = { ...d, id, status: d.status || 'active', date: d.date || new Date().toISOString().slice(0, 10) };
+      const next = {
+        ...prev,
+        debts: [...prev.debts, debt],
+        contributions: debt.emi > 0
+          ? [...prev.contributions, {
+            holdingId: id,
+            holdingKind: 'debt' as const,
+            type: 'recurring' as const,
+            amount: debt.emi,
+            freq: 'monthly' as const,
+            startDate: debt.date,
+            status: debt.status,
+            id: genId('cnb'),
+          }]
+          : prev.contributions,
+      };
       save(next);
       return next;
     });
@@ -223,7 +300,40 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const updateDebt = useCallback((id: string, d: Partial<Debt>) => {
     setData((prev) => {
-      const next = { ...prev, debts: prev.debts.map((x) => (x.id === id ? { ...x, ...d } : x)) };
+      const existing = prev.debts.find((debt) => debt.id === id);
+      if (!existing) return prev;
+      const debt = { ...existing, ...d };
+      const linked = prev.contributions.filter((contribution) => contribution.holdingKind === 'debt' && contribution.holdingId === id && contribution.type === 'recurring');
+      let contributions = prev.contributions;
+      if (debt.emi > 0) {
+        const contributionFields = {
+          amount: debt.emi,
+          startDate: debt.date,
+        };
+        if (linked.length > 0) {
+          const linkedId = linked[0].id;
+          const linkedIds = new Set(linked.map((contribution) => contribution.id));
+          contributions = prev.contributions
+            .filter((contribution) => !linkedIds.has(contribution.id) || contribution.id === linkedId)
+            .map((contribution) => contribution.id === linkedId
+              ? { ...contribution, ...contributionFields, status: debt.status }
+              : contribution);
+        } else {
+          contributions = [...prev.contributions, {
+            ...contributionFields,
+            status: debt.status,
+            holdingId: id,
+            holdingKind: 'debt' as const,
+            type: 'recurring' as const,
+            freq: 'monthly' as const,
+            id: genId('cnb'),
+          }];
+        }
+      } else if (linked.length > 0) {
+        const linkedIds = new Set(linked.map((contribution) => contribution.id));
+        contributions = prev.contributions.filter((contribution) => !linkedIds.has(contribution.id));
+      }
+      const next = { ...prev, debts: prev.debts.map((x) => (x.id === id ? debt : x)), contributions };
       save(next);
       return next;
     });
@@ -356,12 +466,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const importData = useCallback((d: AppData) => {
-    const { pin: _pin, ...safeSettings } = { ...DEFAULT_DATA.settings, ...d.settings };
-    persist({ ...DEFAULT_DATA, ...d, settings: { ...safeSettings, pin: null } });
+    const imported = normalizeData(d);
+    persist({ ...imported, settings: { ...imported.settings, pin: null } });
   }, [persist]);
 
   const resetData = useCallback(() => {
-    persist({ ...DEFAULT_DATA });
+    persist(normalizeData(DEFAULT_DATA));
   }, [persist]);
 
   const exportData = useCallback(() => {
@@ -376,6 +486,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     updateTransaction,
     deleteTransaction,
     addCategory,
+    updateCategory,
     deleteCategory,
     addAsset,
     updateAsset,

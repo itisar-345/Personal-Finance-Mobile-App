@@ -20,11 +20,12 @@ import {
   totalContributed,
   monthlyContribution,
   groupByPeriod,
+  allocationTargetEntries,
   type PeriodMode,
 } from '@/lib/calc';
 import { formatMoney, formatPercent, isValidIsoDate, todayISO } from '@/lib/format';
 import { Trash2, Pencil } from 'lucide-react-native';
-import type { Asset, AssetType, Investment, InvestmentType, Debt, DebtType, AllocationTarget, Contribution, ContributionType, ContributionFreq } from '@/lib/types';
+import type { Asset, AssetType, Investment, InvestmentType, Debt, DebtType, AllocationTarget, Contribution, ContributionType, ContributionFreq, AllocationKey } from '@/lib/types';
 
 type Tab = 'assets' | 'investments' | 'debts' | 'allocation';
 
@@ -255,7 +256,7 @@ function AssetSheet({
 
 function InvestmentsTab() {
   const { data, palette, currency } = useUi();
-  const { addInvestment, addInvestmentWithContribution, updateInvestment, deleteInvestment, setInvestmentStatus } = useStore();
+  const { addInvestment, addInvestmentWithContribution, updateInvestment, updateContribution, deleteInvestment, setInvestmentStatus } = useStore();
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editingInvestment, setEditingInvestment] = useState<Investment | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Investment | null>(null);
@@ -351,7 +352,30 @@ function InvestmentsTab() {
           onClose={() => setEditingInvestment(null)}
           investment={editingInvestment}
           onSave={(fields) => {
-            updateInvestment(editingInvestment.id, fields);
+            const nextFields = {
+              ...fields,
+              purchaseValue: fields.purchaseValue ?? editingInvestment.purchaseValue,
+              currentValue: fields.currentValue ?? editingInvestment.currentValue,
+              purchaseDate: fields.purchaseDate ?? editingInvestment.purchaseDate,
+            };
+            updateInvestment(editingInvestment.id, nextFields);
+
+            const recurringContributions = data.contributions.filter((c) => c.holdingId === editingInvestment.id && c.type === 'recurring');
+            const oneTimeContribution = data.contributions.find((c) => c.holdingId === editingInvestment.id && c.type === 'onetime');
+
+            if (recurringContributions.length > 0 && nextFields.purchaseValue !== undefined) {
+              recurringContributions.forEach((contribution) => {
+                updateContribution(contribution.id, {
+                  amount: nextFields.purchaseValue,
+                  startDate: nextFields.purchaseDate || contribution.startDate,
+                });
+              });
+            } else if (oneTimeContribution && nextFields.purchaseValue !== undefined) {
+              updateContribution(oneTimeContribution.id, {
+                amount: nextFields.purchaseValue,
+                startDate: nextFields.purchaseDate || oneTimeContribution.startDate,
+              });
+            }
             setEditingInvestment(null);
           }}
         />
@@ -505,7 +529,7 @@ function InvestmentSheet({
 
 function DebtsTab() {
   const { data, palette, currency } = useUi();
-  const { addDebt, updateDebt, deleteDebt, addContribution, updateContribution, deleteContribution, setDebtStatus, setContributionStatus } = useStore();
+  const { addDebt, updateDebt, deleteDebt, setDebtStatus } = useStore();
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editingDebt, setEditingDebt] = useState<Debt | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Debt | null>(null);
@@ -517,9 +541,6 @@ function DebtsTab() {
 
   const setDebtLifecycle = (debt: Debt, status: Debt['status']) => {
     setDebtStatus(debt.id, status);
-    data.contributions
-      .filter((contribution) => contribution.holdingId === debt.id)
-      .forEach((contribution) => setContributionStatus(contribution.id, status));
   };
 
   return (
@@ -589,12 +610,7 @@ function DebtsTab() {
       <DebtSheet
         visible={sheetOpen}
         onClose={() => setSheetOpen(false)}
-        onAdd={(debt) => {
-          const id = addDebt(debt);
-          if (debt.emi > 0) {
-            addContribution({ holdingId: id, holdingKind: 'debt', type: 'recurring', amount: debt.emi, freq: 'monthly', startDate: debt.date, status: 'active' });
-          }
-        }}
+        onAdd={addDebt}
       />
       {editingDebt && (
         <DebtSheet
@@ -603,24 +619,7 @@ function DebtsTab() {
           onClose={() => setEditingDebt(null)}
           initial={editingDebt}
           onSave={(fields) => {
-            updateDebt(editingDebt.id, fields);
-            const emiContribution = data.contributions.find((contribution) => contribution.holdingId === editingDebt.id && contribution.holdingKind === 'debt' && contribution.type === 'recurring');
-            if (fields.emi && fields.emi > 0) {
-              const contributionFields = {
-                holdingKind: 'debt' as const,
-                type: 'recurring' as const,
-                amount: fields.emi,
-                freq: 'monthly' as const,
-                startDate: fields.date || editingDebt.date,
-                status: emiContribution?.status ?? editingDebt.status,
-                pausedDate: emiContribution?.pausedDate,
-                closedDate: emiContribution?.closedDate,
-              };
-              if (emiContribution) updateContribution(emiContribution.id, contributionFields);
-              else addContribution({ ...contributionFields, holdingId: editingDebt.id });
-            } else if (emiContribution) {
-              deleteContribution(emiContribution.id);
-            }
+            updateDebt(editingDebt.id, { ...fields, status: editingDebt.status });
             setEditingDebt(null);
           }}
         />
@@ -785,24 +784,70 @@ function AllocationTab() {
   const { data, palette, currency } = useUi();
   const { setAllocationTargets } = useStore();
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState<AllocationTarget | null>(null);
+  const [draftEntries, setDraftEntries] = useState<Array<{ id: string; key?: AllocationKey; name: string; value: number }>>([]);
 
   const actual = useMemo(() => actualAllocation(data.investments, data.assets), [data]);
   const age = data.settings.age;
   const band = age ? bandForAge(age) : null;
   const bandLabel = age ? bandLabelForAge(age) : null;
   const target: AllocationTarget | null = data.settings.allocationTargets || band;
+  const targetEntries = useMemo(() => allocationTargetEntries(target), [target]);
   const drift = target ? allocationDrift(actual, target) : [];
+  const targetDonutData = targetEntries
+    .filter((entry) => entry.value > 0)
+    .map((entry, index) => ({ label: entry.name, value: entry.value, color: palette.chart[index % palette.chart.length] }));
+  const draftTotal = draftEntries.reduce((sum, entry) => sum + entry.value, 0);
 
-  const keys: Exclude<keyof AllocationTarget, 'custom'>[] = ['stocks', 'mutualfund', 'fd', 'ppf', 'gold', 'crypto', 'other'];
-  const draftTotal = draft ? keys.reduce((sum, key) => sum + draft[key], 0) : 0;
   const startEditing = () => {
-    if (target) setDraft({ ...target, custom: true });
+    setDraftEntries(allocationTargetEntries(target).map((entry) => ({ ...entry })));
     setEditing(true);
   };
+
+  const addEntry = () => {
+    setDraftEntries((current) => [
+      ...current,
+      {
+        id: `custom_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        name: `Custom ${current.filter((entry) => !entry.key).length + 1}`,
+        value: 0,
+      },
+    ]);
+  };
+
+  const updateDraftEntry = (id: string, updates: Partial<{ name: string; value: number }>) => {
+    setDraftEntries((current) => current.map((entry) => (entry.id === id ? { ...entry, ...updates } : entry)));
+  };
+
+  const removeDraftEntry = (id: string) => {
+    setDraftEntries((current) => current.map((entry) =>
+      entry.id === id
+        ? { ...entry, value: 0, name: entry.key ? entry.name : entry.name }
+        : entry,
+    ));
+  };
+
   const saveTarget = () => {
-    if (!draft || Math.abs(draftTotal - 1) > 0.001) return;
-    setAllocationTargets(draft);
+    if (Math.abs(draftTotal - 1) > 0.001) return;
+
+    const base: AllocationTarget = {
+      ...(target ?? { stocks: 0, mutualfund: 0, fd: 0, ppf: 0, gold: 0, crypto: 0, other: 0, custom: true }),
+      custom: true,
+      customTargets: [],
+    };
+
+    for (const entry of draftEntries) {
+      if (entry.key) {
+        const numericKey: AllocationKey = entry.key;
+        base[numericKey] = entry.value;
+      } else if (entry.value > 0) {
+        base.customTargets = [
+          ...(base.customTargets ?? []),
+          { id: entry.id, name: entry.name.trim() || 'Custom Target', value: entry.value },
+        ];
+      }
+    }
+
+    setAllocationTargets(base);
     setEditing(false);
   };
 
@@ -816,32 +861,53 @@ function AllocationTab() {
         } />
         <View style={styles.donutRow}>
           <View style={{ alignItems: 'center' }}>
-            <DonutChart size={130} thickness={22} data={keys.map((k, i) => ({ label: k, value: actual[k as keyof typeof actual] || 0, color: palette.chart[i] })).filter((d) => d.value > 0)} />
+            <DonutChart size={130} thickness={22} data={['stocks', 'mutualfund', 'fd', 'ppf', 'gold', 'crypto', 'other'].map((k, i) => ({ label: k, value: actual[k as keyof typeof actual] || 0, color: palette.chart[i] })).filter((d) => d.value > 0)} />
             <Text style={{ fontSize: 12, color: palette.textMuted, marginTop: 6 }}>Actual</Text>
           </View>
           <View style={{ alignItems: 'center' }}>
-            <DonutChart size={130} thickness={22} data={keys.map((k, i) => ({ label: k, value: (target?.[k] as number) || 0, color: palette.chart[i] })).filter((d) => d.value > 0)} />
+            <DonutChart size={130} thickness={22} data={targetDonutData.filter((d) => d.value > 0)} />
             <Text style={{ fontSize: 12, color: palette.textMuted, marginTop: 6 }}>Target {bandLabel ? `(${bandLabel})` : ''}</Text>
           </View>
         </View>
       </Card>
 
-      {editing && draft && (
+      {editing && (
         <Card>
-          <SectionTitle title="Edit Target Allocation" />
-          {keys.map((k) => (
-            <Field key={k} label={k}>
-              <Input
-                value={String(Math.round(draft[k] * 100))}
-                onChangeText={(t) => {
-                  const value = Math.min(100, Number(t.replace(/[^0-9]/g, '')) || 0) / 100;
-                  setDraft((current) => current ? { ...current, [k]: value, custom: true } : current);
-                }}
-                keyboardType="numeric"
-              />
-            </Field>
+          <SectionTitle title="Edit Target Allocation" action={
+            <Pressable onPress={addEntry}>
+              <Text style={{ fontSize: 12, color: palette.primary, fontWeight: '600' }}>+ Add</Text>
+            </Pressable>
+          } />
+          {draftEntries.map((entry) => (
+            <View key={entry.id} style={{ marginBottom: 12, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: palette.border }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                <Text style={{ fontSize: 12, fontWeight: '700', color: palette.text }}>{entry.key ? entry.name : 'Custom Target'}</Text>
+                <Pressable onPress={() => removeDraftEntry(entry.id)}>
+                  <Text style={{ fontSize: 11, color: palette.danger, fontWeight: '600' }}>Delete</Text>
+                </Pressable>
+              </View>
+              {!entry.key && (
+                <Field label="Name">
+                  <Input
+                    value={entry.name}
+                    onChangeText={(text) => updateDraftEntry(entry.id, { name: text })}
+                    placeholder="e.g. REIT"
+                  />
+                </Field>
+              )}
+              <Field label="Percent (%)">
+                <Input
+                  value={String(Math.round(entry.value * 100))}
+                  onChangeText={(text) => {
+                    const nextValue = Math.max(0, Math.min(100, Number(text.replace(/[^0-9]/g, '')) || 0)) / 100;
+                    updateDraftEntry(entry.id, { value: nextValue });
+                  }}
+                  keyboardType="numeric"
+                />
+              </Field>
+            </View>
           ))}
-          <Text style={{ fontSize: 11, color: palette.textMuted, marginTop: 4 }}>Values are percentages (0–100).</Text>
+          <Text style={{ fontSize: 11, color: palette.textMuted, marginTop: 4 }}>Values are percentages (0–100). The total must equal 100% before saving.</Text>
           <Text style={{ fontSize: 11, color: Math.abs(draftTotal - 1) < 0.001 ? palette.success : palette.danger, marginTop: 4 }}>
             Total: {formatPercent(draftTotal, 0)} {Math.abs(draftTotal - 1) < 0.001 ? 'ready to save' : 'must equal 100%'}
           </Text>

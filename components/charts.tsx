@@ -1,5 +1,5 @@
-import React from 'react';
-import { View, StyleSheet } from 'react-native';
+import React, { useMemo, useState } from 'react';
+import { View, StyleSheet, Text } from 'react-native';
 import Svg, { Circle, G, Line, Path, Rect, Text as SvgText } from 'react-native-svg';
 import { useUi } from './ui';
 
@@ -137,15 +137,17 @@ export function DonutChart({
   thickness?: number;
 }) {
   const { palette } = useUi();
+  const [hovered, setHovered] = useState<string | null>(null);
   const r = size / 2 - thickness / 2;
   const cx = size / 2;
   const cy = size / 2;
   const total = data.reduce((s, d) => s + d.value, 0) || 1;
+  const hoveredData = useMemo(() => data.find((d) => d.label === hovered) ?? null, [data, hovered]);
   let acc = 0;
   const circumference = 2 * Math.PI * r;
 
   return (
-    <View style={{ width: size, height: size, alignSelf: 'center' }}>
+    <View style={{ width: size, height: size + 28, alignSelf: 'center' }}>
       <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
         <Circle cx={cx} cy={cy} r={r} fill="none" stroke={palette.surfaceAlt} strokeWidth={thickness} />
         {data.map((d, i) => {
@@ -168,10 +170,18 @@ export function DonutChart({
               strokeLinecap="butt"
               rotation={rot}
               origin={`${cx},${cy}`}
+              onPressIn={() => setHovered(d.label)}
+              onPressOut={() => setHovered(null)}
             />
           );
         })}
       </Svg>
+      {hoveredData && (
+        <View style={{ alignItems: 'center', marginTop: 6 }}>
+          <Text style={{ fontSize: 11, color: palette.text, fontWeight: '700' }}>{hoveredData.label}</Text>
+          <Text style={{ fontSize: 10, color: palette.textMuted }}>{((hoveredData.value / total) * 100).toFixed(0)}%</Text>
+        </View>
+      )}
     </View>
   );
 }

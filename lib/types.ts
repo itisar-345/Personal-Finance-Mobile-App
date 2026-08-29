@@ -124,6 +124,21 @@ export interface Currency {
   rate: number;
 }
 
+export interface AllocationTargetEntry {
+  id: string;
+  name: string;
+  value: number;
+}
+
+export type AllocationKey =
+  | 'stocks'
+  | 'mutualfund'
+  | 'fd'
+  | 'ppf'
+  | 'gold'
+  | 'crypto'
+  | 'other';
+
 export interface AllocationTarget {
   stocks: number;
   mutualfund: number;
@@ -133,6 +148,7 @@ export interface AllocationTarget {
   crypto: number;
   other: number;
   custom: boolean;
+  customTargets?: AllocationTargetEntry[];
 }
 
 export interface Settings {

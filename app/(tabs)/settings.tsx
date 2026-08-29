@@ -6,7 +6,7 @@ import { Sheet } from '@/components/Sheet';
 import { useStore } from '@/lib/store';
 import { DEFAULT_CURRENCIES } from '@/lib/defaults';
 import { formatMoney, todayISO } from '@/lib/format';
-import { Moon, Sun, Monitor, Lock, Trash2, Bell, Coins, Calendar, FileText, Info, Tag, ChevronRight, Pause, Play } from 'lucide-react-native';
+import { Moon, Sun, Monitor, Lock, Trash2, Bell, Coins, Calendar, FileText, Info, Tag, ChevronRight, Pause, Play, Pencil } from 'lucide-react-native';
 
 function formatBackupDate(iso: string): string {
   const d = new Date(iso);
@@ -648,9 +648,10 @@ function RecurringItemsSheet({ visible, onClose }: { visible: boolean; onClose: 
 
 function CategorySheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const { palette } = useUi();
-  const { data, addCategory, deleteCategory } = useStore();
+  const { data, addCategory, updateCategory, deleteCategory } = useStore();
   const [name, setName] = useState('');
   const [type, setType] = useState<'income' | 'expense'>('expense');
+  const [editing, setEditing] = useState<Category | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Category | null>(null);
 
@@ -676,6 +677,35 @@ function CategorySheet({ visible, onClose }: { visible: boolean; onClose: () => 
     setPendingDelete(cat);
   };
 
+  const startEdit = (cat: Category) => {
+    setEditing(cat);
+    setName(cat.name);
+    setType(cat.type);
+    setError(null);
+  };
+
+  const cancelEdit = () => {
+    setEditing(null);
+    setName('');
+    setError(null);
+  };
+
+  const handleSave = () => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    if (editing && type !== editing.type && data.transactions.some((t) => t.categoryId === editing.id)) {
+      setError('This category is used by existing transactions. Reassign them before changing its type.');
+      return;
+    }
+    const exists = data.categories.some((c) => c.id !== editing?.id && c.name.toLowerCase() === trimmed.toLowerCase() && c.type === type);
+    if (exists) {
+      setError('A category with this name already exists.');
+      return;
+    }
+    if (editing) updateCategory(editing.id, { name: trimmed, type });
+    cancelEdit();
+  };
+
   const incomeCats = data.categories.filter((c) => c.type === 'income');
   const expenseCats = data.categories.filter((c) => c.type === 'expense');
 
@@ -685,6 +715,9 @@ function CategorySheet({ visible, onClose }: { visible: boolean; onClose: () => 
         <Tag size={14} color={cat.type === 'income' ? palette.success : palette.danger} />
         <Text style={{ fontSize: 14, color: palette.text }}>{cat.name}</Text>
       </View>
+      <Pressable onPress={() => startEdit(cat)} hitSlop={8}>
+        <Pencil size={16} color={palette.primary} />
+      </Pressable>
       <Pressable onPress={() => handleDelete(cat)} hitSlop={8}>
         <Trash2 size={16} color={palette.danger} />
       </Pressable>
@@ -714,7 +747,14 @@ function CategorySheet({ visible, onClose }: { visible: boolean; onClose: () => 
           </View>
         </View>
       )}
-      <Button label="Add Category" onPress={handleAdd} disabled={!name.trim()} style={{ marginTop: 4 }} />
+      {editing ? (
+        <View style={{ flexDirection: 'row', gap: 10, marginTop: 4 }}>
+          <Button label="Cancel" variant="outline" onPress={cancelEdit} style={{ flex: 1 }} />
+          <Button label="Save Category" onPress={handleSave} disabled={!name.trim()} style={{ flex: 1 }} />
+        </View>
+      ) : (
+        <Button label="Add Category" onPress={handleAdd} disabled={!name.trim()} style={{ marginTop: 4 }} />
+      )}
 
       <Text style={[styles.subHeader, { color: palette.textMuted }]}>Expense ({expenseCats.length})</Text>
       {expenseCats.map(renderCat)}
