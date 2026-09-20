@@ -1,13 +1,13 @@
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 import type { AppData } from './types';
+import { formatMoney, getCurrency } from './format';
 
 const REMINDER_CHANNEL_ID = 'payment-reminders';
 type ReminderFrequency = 'monthly' | 'yearly' | 'weekly' | 'quarterly';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
-    shouldShowAlert: true,
     shouldPlaySound: false,
     shouldSetBadge: false,
     shouldShowBanner: true,
@@ -88,13 +88,16 @@ function recurringNotificationTriggers(dateStr: string, freq: ReminderFrequency)
   });
 }
 
-export async function scheduleRecurringNotifications(data: AppData): Promise<void> {
-  if (Platform.OS === 'web') return;
+export interface ReminderItem {
+  name: string;
+  amount: number;
+  freq: ReminderFrequency;
+  date: string;
+}
 
-  await initializeNotifications();
-  await Notifications.cancelAllScheduledNotificationsAsync();
-
-  const items: { name: string; amount: number; freq: ReminderFrequency; date: string }[] = [];
+/** Everything that needs a reminder; also used to detect when the schedule actually changed. */
+export function buildReminderItems(data: AppData): ReminderItem[] {
+  const items: ReminderItem[] = [];
 
   // Recurring transactions
   for (const t of data.transactions) {
@@ -119,25 +122,47 @@ export async function scheduleRecurringNotifications(data: AppData): Promise<voi
     items.push({ name: holding.name, amount: c.amount, freq, date: c.startDate });
   }
 
-  for (const item of items) {
-    for (const baseTrigger of recurringNotificationTriggers(item.date, item.freq)) {
-      const trigger = {
-        ...baseTrigger,
-        ...(Platform.OS === 'android' ? { channelId: REMINDER_CHANNEL_ID } : {}),
-      } as Notifications.NotificationTriggerInput;
-      await Notifications.scheduleNotificationAsync({
-        content: {
-          title: 'FinTrack — Payment Due',
-          body: `${item.name}: ₹${item.amount.toLocaleString()} due today`,
-          data: {},
-        },
-        trigger,
-      });
-    }
-  }
+  return items;
 }
 
-export async function cancelAllNotifications(): Promise<void> {
-  if (Platform.OS === 'web') return;
-  await Notifications.cancelAllScheduledNotificationsAsync();
+// Cancel + reschedule is async; overlapping runs would interleave and leave duplicates, so run one at a time.
+let queue: Promise<void> = Promise.resolve();
+
+function enqueue(task: () => Promise<void>): Promise<void> {
+  const run = queue.then(task);
+  queue = run.catch(() => {});
+  return run;
+}
+
+export function scheduleRecurringNotifications(data: AppData): Promise<void> {
+  if (Platform.OS === 'web') return Promise.resolve();
+  const items = buildReminderItems(data);
+  const currency = getCurrency(data.settings.currencies, data.settings.currencyCode);
+
+  return enqueue(async () => {
+    await initializeNotifications();
+    await Notifications.cancelAllScheduledNotificationsAsync();
+
+    for (const item of items) {
+      for (const baseTrigger of recurringNotificationTriggers(item.date, item.freq)) {
+        const trigger = {
+          ...baseTrigger,
+          ...(Platform.OS === 'android' ? { channelId: REMINDER_CHANNEL_ID } : {}),
+        } as Notifications.NotificationTriggerInput;
+        await Notifications.scheduleNotificationAsync({
+          content: {
+            title: 'FinTrack — Payment Due',
+            body: `${item.name}: ${formatMoney(item.amount, currency)} due today`,
+            data: {},
+          },
+          trigger,
+        });
+      }
+    }
+  });
+}
+
+export function cancelAllNotifications(): Promise<void> {
+  if (Platform.OS === 'web') return Promise.resolve();
+  return enqueue(() => Notifications.cancelAllScheduledNotificationsAsync());
 }

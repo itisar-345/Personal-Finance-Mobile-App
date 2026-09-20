@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView, SafeAreaView, Pressable, Share, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, Share, Platform } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { requestNotificationPermission, scheduleRecurringNotifications, cancelAllNotifications } from '@/lib/notifications';
 import { Card, SectionTitle, useUi, Chip, Button, Input, Field, StatusBadge, LifecycleActions } from '@/components/ui';
 import { Sheet } from '@/components/Sheet';
@@ -34,7 +35,7 @@ export default function SettingsScreen() {
         ...data.debts.filter((d) => d.status === 'active').map((d) => d.id),
         ...data.investments.filter((i) => i.status === 'active').map((i) => i.id),
       ]);
-      return data.transactions.filter((t) => t.recurring !== 'none').length +
+      return data.transactions.filter((t) => t.recurring !== 'none' && t.status === 'active').length +
         data.contributions.filter((c) => c.type === 'recurring' && c.status === 'active' && activeHoldingIds.has(c.holdingId)).length;
     },
     [data.transactions, data.contributions, data.debts, data.investments, data.assets],
@@ -59,7 +60,11 @@ export default function SettingsScreen() {
     updateSettings({ lastBackupDate: today });
   };
 
-  const csvEscape = (s: string) => `"${s.replace(/"/g, '""')}"`;
+  // Quote the field, and neutralise leading = + - @ so spreadsheets don't run it as a formula.
+  const csvEscape = (s: string) => {
+    const safe = /^[=+\-@\t\r]/.test(s) ? "'" + s : s;
+    return '"' + safe.replace(/"/g, '""') + '"';
+  };
 
   const doExportCsv = () => {
     const rows = ['date,type,amount,category,note,recurring'];
@@ -117,7 +122,7 @@ export default function SettingsScreen() {
   };
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: palette.bg }]}>
+    <SafeAreaView edges={['top', 'left', 'right']} style={[styles.container, { backgroundColor: palette.bg }]}>
       <View style={styles.header}>
         <Text style={[styles.screenTitle, { color: palette.text }]}>Settings</Text>
       </View>
@@ -391,14 +396,15 @@ function RateSheet({ visible, onClose }: { visible: boolean; onClose: () => void
     for (const c of data.settings.currencies) {
       const v = rates[c.code];
       if (v === '' || v === undefined) continue;
-      if (isNaN(Number(v)) || Number(v) < 0) {
+      if (isNaN(Number(v)) || Number(v) <= 0) {
         setRateError(`Invalid rate for ${c.code}.`);
         return;
       }
     }
     const updated: Currency[] = data.settings.currencies.map((c) => ({
       ...c,
-      rate: rates[c.code] !== '' && rates[c.code] !== undefined ? Number(rates[c.code]) : c.rate,
+      // INR is the base currency every amount is stored in, so its rate is fixed at 1.
+      rate: c.code === 'INR' ? 1 : rates[c.code] !== '' && rates[c.code] !== undefined ? Number(rates[c.code]) : c.rate,
     }));
     updateSettings({ currencies: updated });
     setRateError(null);
@@ -410,7 +416,7 @@ function RateSheet({ visible, onClose }: { visible: boolean; onClose: () => void
       <Text style={{ fontSize: 12, color: palette.textMuted, marginBottom: 12 }}>
         Set the conversion rate from your base currency (INR = 1). Update manually whenever you like — no live API.
       </Text>
-      {data.settings.currencies.map((c) => (
+      {data.settings.currencies.filter((c) => c.code !== 'INR').map((c) => (
         <Field key={c.code} label={`1 INR = ? ${c.code}`}>
           <Input
             value={rates[c.code] ?? ''}
@@ -715,10 +721,10 @@ function CategorySheet({ visible, onClose }: { visible: boolean; onClose: () => 
         <Tag size={14} color={cat.type === 'income' ? palette.success : palette.danger} />
         <Text style={{ fontSize: 14, color: palette.text }}>{cat.name}</Text>
       </View>
-      <Pressable onPress={() => startEdit(cat)} hitSlop={8}>
+      <Pressable onPress={() => startEdit(cat)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Edit">
         <Pencil size={16} color={palette.primary} />
       </Pressable>
-      <Pressable onPress={() => handleDelete(cat)} hitSlop={8}>
+      <Pressable onPress={() => handleDelete(cat)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Delete">
         <Trash2 size={16} color={palette.danger} />
       </Pressable>
     </View>

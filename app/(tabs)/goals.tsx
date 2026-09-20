@@ -1,8 +1,10 @@
 import React, { useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, SafeAreaView, Pressable } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Card, SectionTitle, useUi, Chip, Button, Input, Field, EmptyState } from '@/components/ui';
 import { LineChart, ProgressBar } from '@/components/charts';
 import { Sheet } from '@/components/Sheet';
+import { ConfirmDeleteSheet } from '@/components/ConfirmDeleteSheet';
 import { useStore } from '@/lib/store';
 import {
   goalProgress,
@@ -27,7 +29,7 @@ export default function GoalsScreen() {
   const [tab, setTab] = useState<Tab>('goals');
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: palette.bg }]}>
+    <SafeAreaView edges={['top', 'left', 'right']} style={[styles.container, { backgroundColor: palette.bg }]}>
       <View style={styles.header}>
         <Text style={[styles.screenTitle, { color: palette.text }]}>Goals & Planning</Text>
       </View>
@@ -67,8 +69,12 @@ function GoalsTab() {
           data.goals.map((g) => {
             const progress = goalProgress(g.currentAmount, g.targetAmount);
             const months = monthsUntil(g.targetDate);
-            const isOverdue = months === 0 && progress < 1;
-            const required = (!isOverdue && months > 0) ? requiredMonthlyForGoal(g.targetAmount, g.currentAmount, months, data.settings.expectedReturn || 10) : null;
+            const reached = progress >= 1;
+            const isOverdue = !reached && g.targetDate < todayISO();
+            // A goal due later this month still needs at least one month of funding.
+            const required = (!reached && !isOverdue)
+              ? requiredMonthlyForGoal(g.targetAmount, g.currentAmount, Math.max(1, months), data.settings.expectedReturn || 10)
+              : null;
             const monthlyGap = required === null ? 0 : Math.max(0, required - g.monthlyContribution);
             return (
               <View key={g.id} style={[styles.goalCard, { borderBottomColor: palette.border }]}>
@@ -77,10 +83,10 @@ function GoalsTab() {
                     <Text style={{ fontSize: 15, fontWeight: '700', color: palette.text }}>{g.name}</Text>
                     <Text style={{ fontSize: 11, color: palette.textMuted }}>{g.kind} · {months} mo left</Text>
                   </View>
-                  <Pressable onPress={() => setEditingGoal(g)} hitSlop={8}>
+                  <Pressable onPress={() => setEditingGoal(g)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Edit">
                     <Pencil size={16} color={palette.primary} />
                   </Pressable>
-                  <Pressable onPress={() => setPendingDelete(g)} hitSlop={8}>
+                  <Pressable onPress={() => setPendingDelete(g)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Delete">
                     <Trash2 size={16} color={palette.danger} />
                   </Pressable>
                 </View>
@@ -92,7 +98,9 @@ function GoalsTab() {
                   <Text style={{ fontSize: 12, fontWeight: '700', color: palette.primary }}>{formatPercent(progress)}</Text>
                 </View>
                 <Text style={{ fontSize: 11, color: isOverdue ? palette.danger : palette.textMuted, marginTop: 4 }}>
-                  {isOverdue
+                  {reached
+                    ? 'Goal reached!'
+                  : isOverdue
                     ? 'Overdue — target date has passed'
                   : required !== null
                     ? monthlyGap > 0
@@ -117,7 +125,7 @@ function GoalsTab() {
         />
       )}
       {pendingDelete && (
-        <DeleteConfirmSheet
+        <ConfirmDeleteSheet
           name={pendingDelete.name}
           onCancel={() => setPendingDelete(null)}
           onConfirm={() => { deleteGoal(pendingDelete.id); setPendingDelete(null); }}
@@ -148,7 +156,9 @@ function GoalSheet({
     const ta = Number(targetAmount);
     const ca = Number(currentAmount) || 0;
     if (!name.trim() || ta <= 0 || ca < 0) { setError('Enter a goal name, a target greater than zero, and a valid saved amount.'); return; }
-    const date = targetDate || new Date(Date.now() + 5 * 365 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+    const defaultDate = new Date();
+    defaultDate.setFullYear(defaultDate.getFullYear() + 5);
+    const date = targetDate || todayISO(defaultDate);
     const monthly = Number(monthlyContribution) || 0;
     if (!isValidIsoDate(date)) { setError('Use a valid target date in YYYY-MM-DD format.'); return; }
     if (monthly < 0) { setError('Monthly contribution cannot be negative.'); return; }
@@ -171,10 +181,10 @@ function GoalSheet({
         </View>
       </Field>
       <View style={styles.twoCol}>
-        <Field label="Target Amount">
+        <Field money label="Target Amount">
           <Input value={targetAmount} onChangeText={(t) => setTargetAmount(t.replace(/[^0-9.]/g, ''))} keyboardType="numeric" placeholder="0" />
         </Field>
-        <Field label="Saved So Far">
+        <Field money label="Saved So Far">
           <Input value={currentAmount} onChangeText={(t) => setCurrentAmount(t.replace(/[^0-9.]/g, ''))} keyboardType="numeric" placeholder="0" />
         </Field>
       </View>
@@ -182,7 +192,7 @@ function GoalSheet({
         <Input value={targetDate} onChangeText={setTargetDate} placeholder="YYYY-MM-DD (default +5 yrs)" />
       </Field>
       {error && <Text style={{ fontSize: 13, color: palette.danger }}>{error}</Text>}
-      <Field label="Monthly Contribution">
+      <Field money label="Monthly Contribution">
         <Input value={monthlyContribution} onChangeText={(t) => setMonthlyContribution(t.replace(/[^0-9.]/g, ''))} keyboardType="numeric" placeholder="0" />
       </Field>
       <Button label={initial ? 'Save' : 'Add Goal'} onPress={submit} style={{ marginTop: 8 }} />
@@ -198,7 +208,7 @@ function SimulatorTab() {
   const [ret, setRet] = useState('12');
 
   const sipNum = Number(sip) || 0;
-  const yearsNum = Number(years) || 0;
+  const yearsNum = Math.min(60, Number(years) || 0);
   const retNum = Number(ret) || 0;
 
   const projection = useMemo(() => {
@@ -210,7 +220,7 @@ function SimulatorTab() {
     return points;
   }, [currentNw, sipNum, yearsNum, retNum]);
 
-  const final = projection[projection.length - 1]?.value || currentNw;
+  const final = projection[projection.length - 1]?.value ?? currentNw;
 
   return (
     <View style={{ gap: 14 }}>
@@ -219,7 +229,7 @@ function SimulatorTab() {
         <Text style={{ fontSize: 12, color: palette.textMuted, marginBottom: 8 }}>
           See how changing your monthly investment changes your projected net worth.
         </Text>
-        <Field label="Monthly SIP">
+        <Field money label="Monthly SIP">
           <Input value={sip} onChangeText={(t) => setSip(t.replace(/[^0-9.]/g, ''))} keyboardType="numeric" />
         </Field>
         <View style={styles.twoCol}>
@@ -280,12 +290,15 @@ function EmergencyTab() {
             {formatPercent(progress)}
           </Text>
         </View>
-        {progress < 1 && (
+        {target <= 0 && (
+          <Text style={{ fontSize: 11, color: palette.textMuted, marginTop: 4 }}>Add some expenses to calculate a target.</Text>
+        )}
+        {target > 0 && progress < 1 && (
           <Text style={{ fontSize: 11, color: palette.textMuted, marginTop: 4 }}>
             Save {formatMoney(target - liquid, currency, { compact: true })} more to reach your target.
           </Text>
         )}
-        {progress >= 1 && (
+        {target > 0 && progress >= 1 && (
           <Text style={{ fontSize: 11, color: palette.success, marginTop: 4 }}>Your emergency fund is fully funded.</Text>
         )}
       </Card>
@@ -310,7 +323,7 @@ function DebtPlannerTab() {
       <Card>
         <SectionTitle title="Snowball vs. Avalanche" />
         <Text style={{ fontSize: 12, color: palette.textMuted, marginBottom: 8 }}>
-          Compare two payoff strategies side by side.
+          Compare two payoff strategies side by side. Paused debts are left out.
         </Text>
         <View style={styles.strategyCompare}>
           <View style={{ flex: 1, minWidth: 0 }}>
@@ -358,21 +371,6 @@ function DebtPlannerTab() {
         })}
       </Card>
     </View>
-  );
-}
-
-function DeleteConfirmSheet({ name, onCancel, onConfirm }: { name: string; onCancel: () => void; onConfirm: () => void }) {
-  const { palette } = useUi();
-  return (
-    <Sheet visible onClose={onCancel} title="Delete?">
-      <Text style={{ fontSize: 13, color: palette.textMuted, marginBottom: 16 }}>
-        Delete "{name}"? This cannot be undone.
-      </Text>
-      <View style={{ flexDirection: 'row', gap: 12 }}>
-        <Button label="Cancel" variant="outline" onPress={onCancel} style={{ flex: 1 }} />
-        <Button label="Delete" variant="danger" onPress={onConfirm} style={{ flex: 1 }} />
-      </View>
-    </Sheet>
   );
 }
 

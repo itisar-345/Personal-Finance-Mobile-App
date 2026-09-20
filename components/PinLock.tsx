@@ -1,29 +1,59 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { useUi } from './ui';
 import { useStore } from '../lib/store';
 import { verifyPin } from '../lib/crypto';
 
+const FREE_ATTEMPTS = 4;
+const BASE_LOCK_MS = 30_000;
+const MAX_LOCK_MS = 15 * 60_000;
+
+/** Lockout after the free attempts are used: 30s, then doubling per further miss, capped at 15 minutes. */
+function lockDuration(failedAttempts: number): number {
+  return Math.min(MAX_LOCK_MS, BASE_LOCK_MS * 2 ** Math.max(0, failedAttempts - FREE_ATTEMPTS - 1));
+}
+
 export function PinLock({ onUnlock }: { onUnlock: () => void }) {
   const { palette } = useUi();
-  const { data } = useStore();
+  const { data, updateSettings } = useStore();
   const [entry, setEntry] = useState('');
   const [error, setError] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [now, setNow] = useState(Date.now());
+
+  const lockedUntil = data.settings.pinLockedUntil ?? 0;
+  const secondsLeft = Math.max(0, Math.ceil((lockedUntil - now) / 1000));
+  const locked = secondsLeft > 0;
+
+  useEffect(() => {
+    if (!locked) return;
+    const timer = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(timer);
+  }, [locked]);
 
   const press = (d: string) => {
-    if (entry.length >= 4) return;
+    if (locked || checking || entry.length >= 4) return;
     const next = entry + d;
     setEntry(next);
     setError(false);
-    if (next.length === 4) {
-      verifyPin(next, data.settings.pin || '').then((ok) => {
+    if (next.length < 4) return;
+
+    setChecking(true);
+    verifyPin(next, data.settings.pin || '')
+      .then((ok) => {
         if (ok) {
-          setTimeout(onUnlock, 100);
-        } else {
-          setTimeout(() => { setError(true); setEntry(''); }, 200);
+          updateSettings({ pinFailedAttempts: 0, pinLockedUntil: null });
+          onUnlock();
+          return;
         }
-      });
-    }
+        const failed = (data.settings.pinFailedAttempts ?? 0) + 1;
+        const lockMs = failed > FREE_ATTEMPTS ? lockDuration(failed) : 0;
+        updateSettings({ pinFailedAttempts: failed, pinLockedUntil: lockMs ? Date.now() + lockMs : null });
+        setNow(Date.now());
+        setError(true);
+        setEntry('');
+      })
+      .finally(() => setChecking(false));
   };
 
   return (
@@ -40,13 +70,17 @@ export function PinLock({ onUnlock }: { onUnlock: () => void }) {
           />
         ))}
       </View>
-      {error && <Text style={[styles.error, { color: palette.danger }]}>Incorrect PIN</Text>}
+      {locked ? (
+        <Text style={[styles.error, { color: palette.danger }]}>Too many attempts. Try again in {secondsLeft}s.</Text>
+      ) : error ? (
+        <Text style={[styles.error, { color: palette.danger }]}>Incorrect PIN</Text>
+      ) : null}
       <View style={styles.pad}>
         {['1','2','3','4','5','6','7','8','9','','0','⌫'].map((d, i) =>
           d === '' ? (
             <View key={i} style={styles.key} />
           ) : (
-            <Pressable key={i} style={[styles.key, { backgroundColor: palette.surface, borderColor: palette.border }]} onPress={() => (d === '⌫' ? setEntry((e) => e.slice(0, -1)) : press(d))}>
+            <Pressable key={i} disabled={locked} accessibilityRole="button" accessibilityLabel={d === '⌫' ? 'Delete digit' : d} style={[styles.key, { backgroundColor: palette.surface, borderColor: palette.border }]} onPress={() => (d === '⌫' ? setEntry((e) => e.slice(0, -1)) : press(d))}>
               <Text style={[styles.keyText, { color: palette.text }]}>{d}</Text>
             </Pressable>
           ),

@@ -9,6 +9,7 @@ import type {
   ContributionFreq,
   AllocationTarget,
   AllocationKey,
+  SkippedRange,
 } from './types';
 
 /** Items that are active or paused count toward current totals; closed items are historical only. */
@@ -52,6 +53,11 @@ export function inPeriod(dateStr: string, period: 'monthly' | 'annual', ref: str
   return yearKey(dateStr) === yearKey(ref);
 }
 
+/** True when `date` falls strictly inside a past pause/close window (the pause day and resume day still count). */
+function inSkippedRange(date: string, skipped?: SkippedRange[]): boolean {
+  return !!skipped?.some((range) => date > range.from && date < range.to);
+}
+
 /** Materialize recurring transaction occurrences through `asOf` without duplicating stored data. */
 export function recurringTransactionsThrough(transactions: Transaction[], asOf: string): Transaction[] {
   const result: Transaction[] = [];
@@ -71,7 +77,7 @@ export function recurringTransactionsThrough(transactions: Transaction[], asOf: 
     result.push(transaction);
     let occurrence = nextRecurringDate(transaction.date, transaction.recurring);
     while (occurrence <= endDate) {
-      result.push({
+      if (!inSkippedRange(occurrence, transaction.skipped)) result.push({
         ...transaction,
         id: `${transaction.id}:occurrence:${occurrence}`,
         date: occurrence,
@@ -80,6 +86,7 @@ export function recurringTransactionsThrough(transactions: Transaction[], asOf: 
         status: 'active',
         pausedDate: undefined,
         closedDate: undefined,
+        skipped: undefined,
       });
       occurrence = nextRecurringDate(occurrence, transaction.recurring, transaction.date);
     }
@@ -276,11 +283,11 @@ export function lifestyleInflation(
   if (lastCompletedMonth < 0) return null;
   const ytdSpend = (year: number) =>
     transactions
-      .filter((t) => t.type === 'expense' && yearKey(t.date) === String(year) && new Date(t.date).getMonth() <= lastCompletedMonth)
+      .filter((t) => t.type === 'expense' && yearKey(t.date) === String(year) && Number(t.date.slice(5, 7)) - 1 <= lastCompletedMonth)
       .reduce((s, t) => s + t.amount, 0);
   const ytdInc = (year: number) =>
     transactions
-      .filter((t) => t.type === 'income' && yearKey(t.date) === String(year) && new Date(t.date).getMonth() <= lastCompletedMonth)
+      .filter((t) => t.type === 'income' && yearKey(t.date) === String(year) && Number(t.date.slice(5, 7)) - 1 <= lastCompletedMonth)
       .reduce((s, t) => s + t.amount, 0);
   const thisYearInc = ytdInc(thisYear);
   const lastYearInc = ytdInc(lastYear);
@@ -424,13 +431,23 @@ export const ALLOCATION_KEYS: AllocationKey[] = [
   'other',
 ];
 
+export const ALLOCATION_LABELS: Record<AllocationKey, string> = {
+  stocks: 'Stocks',
+  mutualfund: 'Mutual funds',
+  fd: 'Fixed deposits',
+  ppf: 'PPF',
+  gold: 'Gold',
+  crypto: 'Crypto',
+  other: 'Other',
+};
+
 export function allocationTargetEntries(target?: AllocationTarget | null) {
   const entries: Array<{ id: string; key?: AllocationKey; name: string; value: number }> = [];
   for (const key of ALLOCATION_KEYS) {
     entries.push({
       id: key,
       key,
-      name: key.replace(/([A-Z])/g, ' $1').replace(/^./, (s) => s.toUpperCase()).trim(),
+      name: ALLOCATION_LABELS[key],
       value: Number(target?.[key] ?? 0),
     });
   }
@@ -445,21 +462,14 @@ export function allocationTargetEntries(target?: AllocationTarget | null) {
 }
 
 export function allocationDrift(actual: ActualAllocation, target: AllocationTarget) {
-  const keys: (keyof ActualAllocation)[] = [
-    'stocks',
-    'mutualfund',
-    'fd',
-    'ppf',
-    'gold',
-    'crypto',
-    'other',
-  ];
-  return keys.map((k) => ({
-    type: k,
-    actual: actual[k],
-    target: target[k],
-    drift: actual[k] - target[k],
-  }));
+  // Holdings can only be classified into the built-in types, so custom targets can never be
+  // matched. Rescale the built-in targets to 100% so they don't read as a shortfall everywhere.
+  const builtInTotal = ALLOCATION_KEYS.reduce((sum, k) => sum + (target[k] || 0), 0);
+  const scale = builtInTotal > 0 && (target.customTargets?.length ?? 0) > 0 ? 1 / builtInTotal : 1;
+  return ALLOCATION_KEYS.map((k) => {
+    const targetValue = (target[k] || 0) * scale;
+    return { type: k, actual: actual[k], target: targetValue, drift: actual[k] - targetValue };
+  });
 }
 
 /** Remaining months to pay off a debt using standard amortization. */
@@ -481,109 +491,6 @@ export function debtStrategies(debts: Debt[]) {
   return { snowball, avalanche };
 }
 
-export type DebtStrategyName = 'snowball' | 'avalanche';
-
-export interface DebtStrategySimulation {
-  strategy: DebtStrategyName;
-  order: Debt[];
-  months: number;
-  totalInterest: number;
-  monthlyCashAvailable: number;
-  payoffOrder: string[];
-}
-
-/**
- * Simulate a debt payoff plan using the requested rules:
- *  - Sort by smallest balance for Snowball or highest interest for Avalanche.
- *  - Pay minimums on all debts each month.
- *  - Apply any remaining monthly cash to the top-priority debt.
- *  - If the top priority debt is paid off, its minimum payment rolls into next month's extra cash.
- */
-export function simulateDebtStrategy(
-  debts: Debt[],
-  monthlyCashAvailable: number,
-  strategy: DebtStrategyName,
-): DebtStrategySimulation {
-  const active = debts.filter(countsNow).map((debt) => ({
-    ...debt,
-    balance: debt.outstanding,
-  }));
-
-  if (active.length === 0) {
-    return {
-      strategy,
-      order: [],
-      months: 0,
-      totalInterest: 0,
-      monthlyCashAvailable,
-      payoffOrder: [],
-    };
-  }
-
-  let current = active;
-  let months = 0;
-  let totalInterest = 0;
-  let extraCash = monthlyCashAvailable;
-
-  while (current.some((debt) => debt.balance > 0.001) && months < 1200) {
-    months += 1;
-    current = [...current].sort((a, b) => (strategy === 'snowball'
-      ? a.balance - b.balance
-      : b.interestRate - a.interestRate));
-
-    let remainingCash = extraCash;
-    const paidOff: Array<{ debt: Debt; amount: number }> = [];
-
-    for (const debt of current) {
-      if (debt.balance <= 0.001) continue;
-      const monthlyInterest = debt.balance * (debt.interestRate / 100 / 12);
-      totalInterest += monthlyInterest;
-      debt.balance += monthlyInterest;
-
-      const minimumPayment = Math.min(debt.emi, debt.balance);
-      debt.balance = Math.max(0, debt.balance - minimumPayment);
-      remainingCash = Math.max(0, remainingCash - minimumPayment);
-
-      if (debt.balance <= 0.001) {
-        paidOff.push({ debt: { ...debt }, amount: minimumPayment });
-      }
-    }
-
-    const topPriority = current.find((debt) => debt.balance > 0.001);
-    if (topPriority && remainingCash > 0) {
-      topPriority.balance = Math.max(0, topPriority.balance - remainingCash);
-      remainingCash = 0;
-    }
-
-    const nextCurrent = current
-      .filter((debt) => debt.balance > 0.001)
-      .map((debt) => ({ ...debt }));
-
-    if (paidOff.length > 0) {
-      const freed = paidOff.reduce((sum, item) => sum + item.amount, 0);
-      extraCash = Math.max(0, remainingCash + freed);
-    } else {
-      extraCash = Math.max(0, remainingCash);
-    }
-
-    current = nextCurrent;
-    if (current.length === 0) break;
-  }
-
-  return {
-    strategy,
-    order: current.map((debt) => ({
-      ...debt,
-      outstanding: debt.balance,
-      status: debt.status,
-    })),
-    months,
-    totalInterest,
-    monthlyCashAvailable,
-    payoffOrder: current.map((debt) => debt.name),
-  };
-}
-
 export interface DebtStrategyPlanItem {
   debt: Debt;
   months: number;
@@ -596,50 +503,71 @@ export interface DebtStrategyPlan {
   totalInterest: number;
 }
 
-/** Project a payoff order using all minimum payments, rolling paid-off payments into the target debt. */
+/**
+ * Project a payoff order. Each month interest accrues, every debt gets its minimum (EMI), and
+ * whatever is left of the fixed total budget goes to the first debt in `order` still open, so
+ * minimums of cleared debts roll over. Paused debts are not being paid, so they are left out.
+ */
 export function debtStrategyPlan(order: Debt[]): DebtStrategyPlan {
-  const balances = new Map(order.map((debt) => [debt.id, Math.max(0, debt.outstanding)]));
+  const payable = order.filter((debt) => debt.status === 'active');
+  const balances = new Map(payable.map((debt) => [debt.id, Math.max(0, debt.outstanding)]));
   const payoffMonths = new Map<string, number>();
-  const monthlyBudget = order.reduce((sum, debt) => sum + Math.max(0, debt.emi), 0);
+  const monthlyBudget = payable.reduce((sum, debt) => sum + Math.max(0, debt.emi), 0);
   let totalInterest = 0;
+
+  for (const debt of payable) {
+    if (balances.get(debt.id)! <= 0.005) {
+      balances.delete(debt.id);
+      payoffMonths.set(debt.id, 0);
+    }
+  }
 
   if (balances.size > 0 && monthlyBudget > 0) {
     for (let month = 1; month <= 1200 && balances.size > 0; month++) {
-      const target = order.find((debt) => balances.has(debt.id));
-      if (!target) break;
-      let available = monthlyBudget;
-
-      for (const debt of order) {
+      for (const debt of payable) {
         const balance = balances.get(debt.id);
         if (balance === undefined) continue;
         const interest = balance * (debt.interestRate / 100 / 12);
-        const balanceWithInterest = balance + interest;
-        balances.set(debt.id, balanceWithInterest);
         totalInterest += interest;
-        if (debt.id !== target.id) {
-          const minimum = Math.min(debt.emi, balanceWithInterest);
-          balances.set(debt.id, balanceWithInterest - minimum);
-          available -= minimum;
-        }
+        balances.set(debt.id, balance + interest);
       }
 
-      const targetBalance = balances.get(target.id)!;
-      balances.set(target.id, targetBalance - Math.min(Math.max(0, available), targetBalance));
-      if (balances.get(target.id)! <= 0.005) {
-        balances.delete(target.id);
-        payoffMonths.set(target.id, month);
+      let available = monthlyBudget;
+      for (const debt of payable) {
+        const balance = balances.get(debt.id);
+        if (balance === undefined) continue;
+        const minimum = Math.min(Math.max(0, debt.emi), balance);
+        balances.set(debt.id, balance - minimum);
+        available -= minimum;
+      }
+
+      for (const debt of payable) {
+        if (available <= 0) break;
+        const balance = balances.get(debt.id);
+        if (balance === undefined) continue;
+        const extra = Math.min(available, balance);
+        balances.set(debt.id, balance - extra);
+        available -= extra;
+      }
+
+      for (const debt of payable) {
+        const balance = balances.get(debt.id);
+        if (balance !== undefined && balance <= 0.005) {
+          balances.delete(debt.id);
+          payoffMonths.set(debt.id, month);
+        }
       }
     }
   }
 
-  const items = order.map((debt) => ({
+  const items = payable.map((debt) => ({
     debt,
     months: payoffMonths.get(debt.id) ?? Infinity,
     cumulativeMonths: payoffMonths.get(debt.id) ?? Infinity,
   }));
   return {
     items,
-    totalMonths: items.length === 0 ? 0 : items[items.length - 1].cumulativeMonths,
+    totalMonths: items.length === 0 ? 0 : Math.max(...items.map((item) => item.months)),
     totalInterest: balances.size > 0 ? Infinity : totalInterest,
   };
 }
@@ -700,9 +628,9 @@ export function goalProgress(current: number, target: number): number {
 /** Months remaining until a target date, day-aware (Jan 31 → Feb 1 = 0 months). */
 export function monthsUntil(dateStr: string): number {
   const now = new Date();
-  const d = new Date(dateStr);
-  const months = (d.getFullYear() - now.getFullYear()) * 12 + (d.getMonth() - now.getMonth());
-  const dayAdjust = d.getDate() < now.getDate() ? -1 : 0;
+  const [year, month, day] = dateStr.split('-').map(Number);
+  const months = (year - now.getFullYear()) * 12 + (month - 1 - now.getMonth());
+  const dayAdjust = day < now.getDate() ? -1 : 0;
   return Math.max(0, months + dayAdjust);
 }
 
@@ -758,6 +686,7 @@ export function projectedContributionEntries(c: Contribution, asOf: string): { d
       ? dateAfterDays(c.startDate, i * 7)
       : dateAfterMonths(c.startDate, i * (freq === 'quarterly' ? 3 : 1));
     if (date > endCap) break;
+    if (inSkippedRange(date, c.skipped)) continue;
     entries.push({ date, amount: c.amount });
   }
   return entries;
@@ -779,7 +708,7 @@ export function monthlyContribution(contributions: Contribution[], holdingId: st
     .filter((c) => c.holdingId === holdingId && isRecurringActive(c))
     .reduce((sum, c) => {
       const freq = c.freq || 'monthly';
-          const monthly = freq === 'weekly' ? (c.amount * 52) / 12 : freq === 'quarterly' ? c.amount / 3 : c.amount;
+      const monthly = freq === 'weekly' ? (c.amount * 52) / 12 : freq === 'quarterly' ? c.amount / 3 : c.amount;
       return sum + monthly;
     }, 0);
 }

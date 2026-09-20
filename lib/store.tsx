@@ -11,11 +11,14 @@ import type {
   Settings,
   AllocationTarget,
   Contribution,
+  Currency,
   ItemStatus,
+  SkippedRange,
 } from './types';
 import { DEFAULT_DATA, genId } from './defaults';
-import { bandForAge } from './calc';
+import { ALLOCATION_KEYS, bandForAge } from './calc';
 import { hashPin } from './crypto';
+import { isValidIsoDate, todayISO } from './format';
 
 interface StoreContextValue {
   data: AppData;
@@ -65,50 +68,178 @@ interface StoreContextValue {
 
 const StoreContext = createContext<StoreContextValue | null>(null);
 
-function todayISO(): string {
-  return new Date().toISOString().slice(0, 10);
+interface Lifecycle {
+  status: ItemStatus;
+  pausedDate?: string;
+  closedDate?: string;
+  skipped?: SkippedRange[];
 }
 
+/**
+ * Apply a status change. Leaving a paused/closed state records the gap so resuming
+ * does not back-fill occurrences for the time the item was inactive.
+ */
+function applyStatus<T extends Lifecycle>(item: T, status: ItemStatus, iso: string): T {
+  const inactiveSince = item.status === 'paused' ? item.pausedDate : item.status === 'closed' ? item.closedDate : undefined;
+  const leaving = status === 'active' || (status === 'closed' && item.status === 'paused');
+  const skipped = leaving && inactiveSince && inactiveSince < iso
+    ? [...(item.skipped ?? []), { from: inactiveSince, to: iso }]
+    : item.skipped;
+  return {
+    ...item,
+    status,
+    // Keep the original date if the item is already in the requested state.
+    pausedDate: status === 'paused' ? (item.status === 'paused' && item.pausedDate ? item.pausedDate : iso) : undefined,
+    closedDate: status === 'closed' ? (item.status === 'closed' && item.closedDate ? item.closedDate : iso) : undefined,
+    skipped,
+  };
+}
+
+const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+const isStr = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
+const isObj = (v: unknown): v is Record<string, any> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+function oneOf<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
+  return allowed.includes(value as T) ? (value as T) : fallback;
+}
+
+/** Keep a well-formed ISO date, otherwise fall back (a bad date shouldn't cost the user the whole item). */
+function dateOr(value: unknown, fallback: string): string {
+  return typeof value === 'string' && isValidIsoDate(value) ? value : fallback;
+}
+
+/** Map every valid object in `input`, dropping entries that aren't usable at all. */
+function cleanList<T>(input: unknown, clean: (raw: Record<string, any>) => T | null): T[] {
+  if (!Array.isArray(input)) return [];
+  const out: T[] = [];
+  for (const raw of input) {
+    const item = isObj(raw) ? clean(raw) : null;
+    if (item) out.push(item);
+  }
+  return out;
+}
+
+const STATUSES = ['active', 'paused', 'closed'] as const;
+
+/**
+ * Rebuild AppData from untrusted input (a saved file or an imported backup): entries missing an id or
+ * a usable number are dropped, enums and dates are coerced to valid values, and defaults fill gaps.
+ */
 function normalizeData(input?: Partial<AppData> | null): AppData {
-  const settings: Partial<Settings> = input?.settings ?? {};
+  const settings: Partial<Settings> = isObj(input?.settings) ? (input!.settings as Partial<Settings>) : {};
   const date = todayISO();
+  const categoryIds = new Set<string>();
+
+  const categories = Array.isArray(input?.categories)
+    ? cleanList<Category>(input!.categories, (c) => {
+      if (!isStr(c.id) || !isStr(c.name)) return null;
+      categoryIds.add(c.id);
+      return { ...c, id: c.id, name: c.name, type: oneOf(c.type, ['income', 'expense'] as const, 'expense') } as Category;
+    })
+    : DEFAULT_DATA.categories;
+
+  const currencies = cleanList<Currency>(settings.currencies, (c) =>
+    isStr(c.code) && isStr(c.symbol) && isNum(c.rate) && c.rate > 0 ? { code: c.code, symbol: c.symbol, rate: c.rate } : null);
+  const safeCurrencies = currencies.length > 0 ? currencies : DEFAULT_DATA.settings.currencies;
+  const currencyCode = safeCurrencies.some((c) => c.code === settings.currencyCode)
+    ? (settings.currencyCode as string)
+    : safeCurrencies[0].code;
 
   return {
-    transactions: Array.isArray(input?.transactions)
-      ? input.transactions.map((transaction) => ({
-        ...transaction,
-        recurring: transaction.recurring || 'none',
-        status: transaction.status || 'active',
-      }))
-      : [],
-    categories: Array.isArray(input?.categories) ? input.categories : DEFAULT_DATA.categories,
-    assets: Array.isArray(input?.assets)
-      ? input.assets.map((asset) => ({
-        ...asset,
-        date: asset.date || date,
-        liquid: asset.liquid ?? (asset.type === 'cash' || asset.type === 'bank'),
-      }))
-      : [],
-    investments: Array.isArray(input?.investments)
-      ? input.investments.map((investment) => ({ ...investment, status: investment.status || 'active' }))
-      : [],
-    debts: Array.isArray(input?.debts)
-      ? input.debts.map((debt) => ({ ...debt, status: debt.status || 'active', date: debt.date || date }))
-      : [],
-    goals: Array.isArray(input?.goals)
-      ? input.goals.map((goal) => ({ ...goal, monthlyContribution: goal.monthlyContribution ?? 0 }))
-      : [],
-    contributions: Array.isArray(input?.contributions)
-      ? input.contributions.map((contribution) => ({
-        ...contribution,
-        status: contribution.status || 'active',
-        startDate: contribution.startDate || date,
-      }))
-      : [],
+    transactions: cleanList<Transaction>(input?.transactions, (t) =>
+      isStr(t.id) && isStr(t.categoryId) && isNum(t.amount) && t.amount >= 0
+        ? {
+          ...t,
+          id: t.id,
+          categoryId: t.categoryId,
+          amount: t.amount,
+          type: oneOf(t.type, ['income', 'expense'] as const, 'expense'),
+          date: dateOr(t.date, date),
+          recurring: oneOf(t.recurring, ['none', 'monthly', 'yearly'] as const, 'none'),
+          status: oneOf(t.status, STATUSES, 'active'),
+        } as Transaction
+        : null),
+    categories,
+    assets: cleanList<Asset>(input?.assets, (a) =>
+      isStr(a.id) && isNum(a.value)
+        ? {
+          ...a,
+          id: a.id,
+          name: typeof a.name === 'string' ? a.name : 'Asset',
+          value: a.value,
+          type: oneOf(a.type, ['cash', 'bank', 'realestate', 'gold', 'other'] as const, 'other'),
+          date: dateOr(a.date, date),
+          liquid: typeof a.liquid === 'boolean' ? a.liquid : a.type === 'cash' || a.type === 'bank',
+        } as Asset
+        : null),
+    investments: cleanList<Investment>(input?.investments, (i) =>
+      isStr(i.id) && isNum(i.purchaseValue) && isNum(i.currentValue)
+        ? {
+          ...i,
+          id: i.id,
+          name: typeof i.name === 'string' ? i.name : 'Investment',
+          type: oneOf(i.type, ['stocks', 'mutualfund', 'fd', 'ppf', 'crypto', 'other'] as const, 'other'),
+          purchaseValue: i.purchaseValue,
+          currentValue: i.currentValue,
+          purchaseDate: dateOr(i.purchaseDate, date),
+          status: oneOf(i.status, STATUSES, 'active'),
+        } as Investment
+        : null),
+    debts: cleanList<Debt>(input?.debts, (d) =>
+      isStr(d.id) && isNum(d.outstanding) && isNum(d.interestRate) && isNum(d.emi)
+        ? {
+          ...d,
+          id: d.id,
+          name: typeof d.name === 'string' ? d.name : 'Debt',
+          type: oneOf(d.type, ['loan', 'creditcard', 'emi'] as const, 'loan'),
+          outstanding: d.outstanding,
+          interestRate: d.interestRate,
+          emi: d.emi,
+          tenureMonths: isNum(d.tenureMonths) ? d.tenureMonths : 0,
+          status: oneOf(d.status, STATUSES, 'active'),
+          date: dateOr(d.date, date),
+        } as Debt
+        : null),
+    goals: cleanList<Goal>(input?.goals, (g) =>
+      isStr(g.id) && isNum(g.targetAmount) && isNum(g.currentAmount)
+        ? {
+          ...g,
+          id: g.id,
+          name: typeof g.name === 'string' ? g.name : 'Goal',
+          kind: oneOf(g.kind, ['retirement', 'house', 'emergency', 'other'] as const, 'other'),
+          targetAmount: g.targetAmount,
+          currentAmount: g.currentAmount,
+          targetDate: dateOr(g.targetDate, date),
+          monthlyContribution: isNum(g.monthlyContribution) ? g.monthlyContribution : 0,
+        } as Goal
+        : null),
+    contributions: cleanList<Contribution>(input?.contributions, (c) =>
+      isStr(c.id) && isStr(c.holdingId) && isNum(c.amount)
+        ? {
+          ...c,
+          id: c.id,
+          holdingId: c.holdingId,
+          amount: c.amount,
+          holdingKind: oneOf(c.holdingKind, ['investment', 'asset', 'debt'] as const, 'investment'),
+          type: oneOf(c.type, ['onetime', 'recurring'] as const, 'onetime'),
+          freq: c.freq === undefined ? undefined : oneOf(c.freq, ['weekly', 'monthly', 'quarterly'] as const, 'monthly'),
+          status: oneOf(c.status, STATUSES, 'active'),
+          startDate: dateOr(c.startDate, date),
+        } as Contribution
+        : null),
     settings: {
       ...DEFAULT_DATA.settings,
       ...settings,
-      currencies: Array.isArray(settings.currencies) ? settings.currencies : DEFAULT_DATA.settings.currencies,
+      theme: oneOf(settings.theme, ['light', 'dark', 'system'] as const, DEFAULT_DATA.settings.theme),
+      currencies: safeCurrencies,
+      currencyCode,
+      expectedReturn: isNum(settings.expectedReturn) ? settings.expectedReturn : DEFAULT_DATA.settings.expectedReturn,
+      age: isNum(settings.age) && settings.age > 0 && settings.age < 130 ? settings.age : null,
+      allocationTargets: isObj(settings.allocationTargets) && ALLOCATION_KEYS.every((k) => isNum((settings.allocationTargets as any)[k]))
+        ? settings.allocationTargets
+        : null,
+      pinFailedAttempts: isNum(settings.pinFailedAttempts) ? settings.pinFailedAttempts : 0,
+      pinLockedUntil: isNum(settings.pinLockedUntil) ? settings.pinLockedUntil : null,
     },
   };
 }
@@ -195,7 +326,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const addAsset = useCallback((a: Omit<Asset, 'id'>): string => {
     const id = genId('ast');
     setData((prev) => {
-      const next = { ...prev, assets: [...prev.assets, { ...a, id, date: a.date || new Date().toISOString().slice(0, 10) }] };
+      const next = { ...prev, assets: [...prev.assets, { ...a, id, date: a.date || todayISO() }] };
       save(next);
       return next;
     });
@@ -275,7 +406,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const addDebt = useCallback((d: Omit<Debt, 'id'>): string => {
     const id = genId('dbt');
     setData((prev) => {
-      const debt = { ...d, id, status: d.status || 'active', date: d.date || new Date().toISOString().slice(0, 10) };
+      const debt = { ...d, id, status: d.status || 'active', date: d.date || todayISO() };
       const next = {
         ...prev,
         debts: [...prev.debts, debt],
@@ -400,23 +531,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const setStatus = useCallback(
-    (kind: 'transactions' | 'assets' | 'investments' | 'debts', id: string, status: ItemStatus, date?: string) => {
+    (kind: 'transactions' | 'investments' | 'debts', id: string, status: ItemStatus, date?: string) => {
       setData((prev) => {
-        const iso = date || new Date().toISOString().slice(0, 10);
-        const patch: Record<string, unknown> = { status };
-        if (status === 'paused') { patch.pausedDate = iso; patch.closedDate = undefined; }
-        if (status === 'closed') { patch.closedDate = iso; patch.pausedDate = undefined; }
-        if (status === 'active') { patch.pausedDate = undefined; patch.closedDate = undefined; }
+        const iso = date || todayISO();
+        const holdingKind = kind === 'investments' ? 'investment' : 'debt';
         const next = {
           ...prev,
-          [kind]: (prev[kind] as any[]).map((x) => (x.id === id ? { ...x, ...patch } : x)),
-          contributions: kind === 'investments' || kind === 'debts'
-            ? prev.contributions.map((x) => (
-              x.holdingKind === (kind === 'investments' ? 'investment' : 'debt') && x.holdingId === id
-                ? { ...x, ...patch }
-                : x
-            ))
-            : prev.contributions,
+          [kind]: (prev[kind] as Array<Lifecycle & { id: string }>).map((x) => (x.id === id ? applyStatus(x, status, iso) : x)),
+          contributions: kind === 'transactions'
+            ? prev.contributions
+            : prev.contributions.map((x) => (x.holdingKind === holdingKind && x.holdingId === id ? applyStatus(x, status, iso) : x)),
         };
         save(next);
         return next;
@@ -431,12 +555,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const setContributionStatus = useCallback((id: string, status: ItemStatus, date?: string) => {
     setData((prev) => {
-      const iso = date || new Date().toISOString().slice(0, 10);
-      const patch: Record<string, unknown> = { status };
-      if (status === 'paused') { patch.pausedDate = iso; patch.closedDate = undefined; }
-      if (status === 'closed') { patch.closedDate = iso; patch.pausedDate = undefined; }
-      if (status === 'active') { patch.pausedDate = undefined; patch.closedDate = undefined; }
-      const next = { ...prev, contributions: prev.contributions.map((x) => (x.id === id ? { ...x, ...patch } : x)) };
+      const iso = date || todayISO();
+      const next = { ...prev, contributions: prev.contributions.map((x) => (x.id === id ? applyStatus(x, status, iso) : x)) };
       save(next);
       return next;
     });
@@ -446,6 +566,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     const patch = { ...s };
     if (s.pin !== undefined && s.pin !== null && s.pin !== '') {
       patch.pin = await hashPin(s.pin);
+    }
+    if (s.pin !== undefined) {
+      patch.pinFailedAttempts = 0;
+      patch.pinLockedUntil = null;
     }
     setData((prev) => {
       if (s.age !== undefined && s.age !== null && !prev.settings.allocationTargets?.custom) {
@@ -467,7 +591,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const importData = useCallback((d: AppData) => {
     const imported = normalizeData(d);
-    persist({ ...imported, settings: { ...imported.settings, pin: null } });
+    persist({ ...imported, settings: { ...imported.settings, pin: null, pinFailedAttempts: 0, pinLockedUntil: null } });
   }, [persist]);
 
   const resetData = useCallback(() => {
@@ -476,7 +600,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const exportData = useCallback(() => {
     const { pin: _pin, ...safeSettings } = data.settings;
-    return { ...data, settings: { ...safeSettings, pin: null } };
+    return { ...data, settings: { ...safeSettings, pin: null, pinFailedAttempts: 0, pinLockedUntil: null } };
   }, [data]);
 
   const value: StoreContextValue = {

@@ -41,6 +41,8 @@ export const DEFAULT_SETTINGS: Settings = {
   currencies: DEFAULT_CURRENCIES,
   theme: 'system',
   pin: null,
+  pinFailedAttempts: 0,
+  pinLockedUntil: null,
   age: null,
   allocationTargets: null,
   expectedReturn: 10,

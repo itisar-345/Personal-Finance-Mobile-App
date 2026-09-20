@@ -65,6 +65,9 @@ export function Button({
     <Pressable
       onPress={onPress}
       disabled={disabled}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled: !!disabled }}
       style={({ pressed }) => [
         styles.button,
         { backgroundColor: bg, borderColor: border, opacity: pressed ? 0.8 : disabled ? 0.5 : 1 },
@@ -91,6 +94,9 @@ export function Chip({
   return (
     <Pressable
       onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ selected: !!selected }}
       style={({ pressed }) => [
         styles.chip,
         {
@@ -106,11 +112,17 @@ export function Chip({
   );
 }
 
-export function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  const { palette } = useUi();
+/**
+ * `money` marks an amount input. Amounts are always entered in the base currency (rate 1), so when a
+ * different display currency is selected the label says so instead of silently misreading the number.
+ */
+export function Field({ label, money, children }: { label: string; money?: boolean; children: React.ReactNode }) {
+  const { palette, currency, settings } = useUi();
+  const base = settings.currencies.find((c) => c.rate === 1);
+  const suffix = money && base && base.code !== currency.code ? ` (in ${base.symbol} ${base.code})` : '';
   return (
     <View style={styles.field}>
-      <Text style={[styles.fieldLabel, { color: palette.textMuted }]}>{label}</Text>
+      <Text style={[styles.fieldLabel, { color: palette.textMuted }]}>{label}{suffix}</Text>
       {children}
     </View>
   );
@@ -183,22 +195,22 @@ export function LifecycleActions({
   return (
     <View style={styles.lifecycleRow}>
       {status === 'active' && onPause && (
-        <Pressable onPress={onPause} style={[styles.lifecycleBtn, { borderColor: palette.warning }]}>
+        <Pressable onPress={onPause} accessibilityRole="button" accessibilityLabel="Pause" style={[styles.lifecycleBtn, { borderColor: palette.warning }]}>
           <Text style={{ fontSize: 11, fontWeight: '600', color: palette.warning }}>Pause</Text>
         </Pressable>
       )}
       {status === 'paused' && onResume && (
-        <Pressable onPress={onResume} style={[styles.lifecycleBtn, { borderColor: palette.success }]}>
+        <Pressable onPress={onResume} accessibilityRole="button" accessibilityLabel="Resume" style={[styles.lifecycleBtn, { borderColor: palette.success }]}>
           <Text style={{ fontSize: 11, fontWeight: '600', color: palette.success }}>Resume</Text>
         </Pressable>
       )}
       {status !== 'closed' && onClose && (
-        <Pressable onPress={onClose} style={[styles.lifecycleBtn, { borderColor: palette.textMuted }]}>
+        <Pressable onPress={onClose} accessibilityRole="button" accessibilityLabel="Close" style={[styles.lifecycleBtn, { borderColor: palette.textMuted }]}>
           <Text style={{ fontSize: 11, fontWeight: '600', color: palette.textMuted }}>Close</Text>
         </Pressable>
       )}
       {status === 'closed' && onReopen && (
-        <Pressable onPress={onReopen} style={[styles.lifecycleBtn, { borderColor: palette.success }]}>
+        <Pressable onPress={onReopen} accessibilityRole="button" accessibilityLabel="Reopen" style={[styles.lifecycleBtn, { borderColor: palette.success }]}>
           <Text style={{ fontSize: 11, fontWeight: '600', color: palette.success }}>Reopen</Text>
         </Pressable>
       )}

@@ -1,8 +1,10 @@
 import React, { useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, SafeAreaView, Pressable } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Card, SectionTitle, useUi, Chip, Button, Input, Field, EmptyState, StatusBadge, LifecycleActions } from '@/components/ui';
 import { DonutChart, ProgressBar } from '@/components/charts';
 import { Sheet } from '@/components/Sheet';
+import { ConfirmDeleteSheet } from '@/components/ConfirmDeleteSheet';
 import { useStore } from '@/lib/store';
 import {
   totalAssets,
@@ -21,6 +23,7 @@ import {
   monthlyContribution,
   groupByPeriod,
   allocationTargetEntries,
+  ALLOCATION_LABELS,
   type PeriodMode,
 } from '@/lib/calc';
 import { formatMoney, formatPercent, isValidIsoDate, todayISO } from '@/lib/format';
@@ -34,7 +37,7 @@ export default function AssetsScreen() {
   const [tab, setTab] = useState<Tab>('assets');
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: palette.bg }]}>
+    <SafeAreaView edges={['top', 'left', 'right']} style={[styles.container, { backgroundColor: palette.bg }]}>
       <View style={styles.header}>
         <Text style={[styles.screenTitle, { color: palette.text }]}>Assets & Debt</Text>
       </View>
@@ -152,10 +155,10 @@ function AssetsTab() {
                     <Text style={{ fontSize: 11, color: palette.textMuted }}>{a.type} · {a.liquid ? 'Liquid' : 'Illiquid'}</Text>
                   </View>
                   <Text style={{ fontSize: 14, fontWeight: '700', color: palette.text }}>{formatMoney(a.value, currency, { compact: true })}</Text>
-                  <Pressable onPress={() => setEditingAsset(a)} hitSlop={8}>
+                  <Pressable onPress={() => setEditingAsset(a)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Edit">
                     <Pencil size={16} color={palette.primary} />
                   </Pressable>
-                  <Pressable onPress={() => setPendingDelete(a)} hitSlop={8}>
+                  <Pressable onPress={() => setPendingDelete(a)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Delete">
                     <Trash2 size={16} color={palette.danger} />
                   </Pressable>
                 </View>
@@ -166,7 +169,7 @@ function AssetsTab() {
       </Card>
 
       {pendingDelete && (
-        <DeleteConfirmSheet
+        <ConfirmDeleteSheet
           name={pendingDelete.name}
           onCancel={() => setPendingDelete(null)}
           onConfirm={() => { deleteAsset(pendingDelete.id); setPendingDelete(null); }}
@@ -234,7 +237,7 @@ function AssetSheet({
           ))}
         </View>
       </Field>
-      <Field label="Value">
+      <Field money label="Value">
         <Input value={value} onChangeText={(t) => setValue(t.replace(/[^0-9.]/g, ''))} keyboardType="numeric" placeholder="0" />
       </Field>
       <Field label="Date">
@@ -304,9 +307,10 @@ function InvestmentsTab() {
                 const contributed = totalContributed(data.contributions, inv.id, today);
                 const costBasis = contributed > 0 ? contributed : inv.purchaseValue;
                 const gain = inv.currentValue - costBasis;
-                // CAGR is only meaningful for a single lump-sum; hide it when SIP contributions exist.
+                // CAGR is only meaningful for a single lump-sum; hide it when SIPs or several contributions exist.
                 const contribs = data.contributions.filter((c) => c.holdingId === inv.id);
-                const cagrValue = contribs.length === 0 ? cagr(inv.purchaseValue, inv.currentValue, inv.purchaseDate, today) : null;
+                const isLumpSum = contribs.length <= 1 && contribs.every((c) => c.type === 'onetime');
+                const cagrValue = isLumpSum ? cagr(inv.purchaseValue, inv.currentValue, inv.purchaseDate, today) : null;
                 const monthly = monthlyContribution(data.contributions, inv.id);
                 return (
                   <View key={inv.id} style={styles.itemRow}>
@@ -329,12 +333,14 @@ function InvestmentsTab() {
                     </View>
                     <View style={{ alignItems: 'flex-end' }}>
                       <Text style={{ fontSize: 14, fontWeight: '700', color: palette.text }}>{formatMoney(inv.currentValue, currency, { compact: true })}</Text>
-                      
+                      <Text style={{ fontSize: 11, color: gain >= 0 ? palette.success : palette.danger }}>
+                        {gain >= 0 ? '+' : '-'}{formatMoney(Math.abs(gain), currency, { compact: true })}
+                      </Text>
                     </View>
-                    <Pressable onPress={() => setEditingInvestment(inv)} hitSlop={8}>
+                    <Pressable onPress={() => setEditingInvestment(inv)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Edit">
                       <Pencil size={16} color={palette.primary} />
                     </Pressable>
-                    <Pressable onPress={() => setPendingDelete(inv)} hitSlop={8}>
+                    <Pressable onPress={() => setPendingDelete(inv)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Delete">
                       <Trash2 size={16} color={palette.danger} />
                     </Pressable>
                   </View>
@@ -360,21 +366,20 @@ function InvestmentsTab() {
             };
             updateInvestment(editingInvestment.id, nextFields);
 
-            const recurringContributions = data.contributions.filter((c) => c.holdingId === editingInvestment.id && c.type === 'recurring');
-            const oneTimeContribution = data.contributions.find((c) => c.holdingId === editingInvestment.id && c.type === 'onetime');
-
-            if (recurringContributions.length > 0 && nextFields.purchaseValue !== undefined) {
-              recurringContributions.forEach((contribution) => {
-                updateContribution(contribution.id, {
-                  amount: nextFields.purchaseValue,
-                  startDate: nextFields.purchaseDate || contribution.startDate,
+            // Purchase value/date describe the first funding entry only. Sync just the fields that
+            // changed, so unrelated edits (rename, current value) never touch SIP amounts or dates.
+            const valueChanged = nextFields.purchaseValue !== editingInvestment.purchaseValue;
+            const dateChanged = nextFields.purchaseDate !== editingInvestment.purchaseDate;
+            if (valueChanged || dateChanged) {
+              const first = data.contributions
+                .filter((c) => c.holdingId === editingInvestment.id && c.holdingKind === 'investment')
+                .sort((a, b) => a.startDate.localeCompare(b.startDate))[0];
+              if (first) {
+                updateContribution(first.id, {
+                  ...(valueChanged ? { amount: nextFields.purchaseValue } : {}),
+                  ...(dateChanged ? { startDate: nextFields.purchaseDate } : {}),
                 });
-              });
-            } else if (oneTimeContribution && nextFields.purchaseValue !== undefined) {
-              updateContribution(oneTimeContribution.id, {
-                amount: nextFields.purchaseValue,
-                startDate: nextFields.purchaseDate || oneTimeContribution.startDate,
-              });
+              }
             }
             setEditingInvestment(null);
           }}
@@ -391,7 +396,7 @@ function InvestmentsTab() {
       />
 
       {pendingDelete && (
-        <DeleteConfirmSheet
+        <ConfirmDeleteSheet
           name={pendingDelete.name}
           onCancel={() => setPendingDelete(null)}
           onConfirm={() => { deleteInvestment(pendingDelete.id); setPendingDelete(null); }}
@@ -499,7 +504,7 @@ function InvestmentSheet({
               <Chip label="Recurring (SIP)" selected={contribType === 'recurring'} onPress={() => setContribType('recurring')} />
             </View>
           </Field>
-          <Field label={contribType === 'onetime' ? 'Amount' : 'SIP Amount'}>
+          <Field money label={contribType === 'onetime' ? 'Amount' : 'SIP Amount'}>
             <Input value={amount} onChangeText={(t) => { setAmount(t.replace(/[^0-9.]/g, '')); setError(null); }} keyboardType="numeric" placeholder="0" />
           </Field>
           {contribType === 'recurring' && (
@@ -591,10 +596,10 @@ function DebtsTab() {
                       <Text style={{ fontSize: 14, fontWeight: '700', color: palette.text }}>{formatMoney(d.outstanding, currency, { compact: true })}</Text>
                       <Text style={{ fontSize: 11, color: palette.textMuted }}>EMI {formatMoney(d.emi, currency, { compact: true })}</Text>
                     </View>
-                    <Pressable onPress={() => setEditingDebt(d)} hitSlop={8}>
+                    <Pressable onPress={() => setEditingDebt(d)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Edit">
                       <Pencil size={16} color={palette.primary} />
                     </Pressable>
-                    <Pressable onPress={() => setPendingDelete(d)} hitSlop={8}>
+                    <Pressable onPress={() => setPendingDelete(d)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Delete">
                       <Trash2 size={16} color={palette.danger} />
                     </Pressable>
                   </View>
@@ -625,7 +630,7 @@ function DebtsTab() {
         />
       )}
       {pendingDelete && (
-        <DeleteConfirmSheet
+        <ConfirmDeleteSheet
           name={pendingDelete.name}
           onCancel={() => setPendingDelete(null)}
           onConfirm={() => { deleteDebt(pendingDelete.id); setPendingDelete(null); }}
@@ -705,7 +710,7 @@ function DebtSheet({
           ))}
         </View>
       </Field>
-      <Field label="Outstanding Balance">
+      <Field money label="Outstanding Balance">
         <Input value={outstanding} onChangeText={(t) => setOutstanding(t.replace(/[^0-9.]/g, ''))} keyboardType="numeric" placeholder="0" />
       </Field>
       <View style={styles.twoCol}>
@@ -716,7 +721,7 @@ function DebtSheet({
           <Input value={tenureMonths} onChangeText={(t) => setTenureMonths(t.replace(/[^0-9.]/g, ''))} keyboardType="numeric" placeholder="0" />
         </Field>
       </View>
-      <Field label="Monthly EMI">
+      <Field money label="Monthly EMI">
         <Input value={emi} onChangeText={(t) => setEmi(t.replace(/[^0-9.]/g, ''))} keyboardType="numeric" placeholder="0" />
       </Field>
       <Field label="Date">
@@ -765,10 +770,10 @@ function InvestmentEditSheet({
           ))}
         </View>
       </Field>
-      <Field label="Purchase Value">
+      <Field money label="Purchase Value">
         <Input value={purchaseValue} onChangeText={(t) => setPurchaseValue(t.replace(/[^0-9.]/g, ''))} keyboardType="numeric" placeholder="0" />
       </Field>
-      <Field label="Current Value">
+      <Field money label="Current Value">
         <Input value={currentValue} onChangeText={(t) => setCurrentValue(t.replace(/[^0-9.]/g, ''))} keyboardType="numeric" placeholder="0" />
       </Field>
       <Field label="Purchase Date">
@@ -780,13 +785,30 @@ function InvestmentEditSheet({
   );
 }
 
+/** Percent field keeping its own text, so it can be cleared and accepts decimals (value is a 0..1 fraction). */
+function PercentInput({ value, onChange }: { value: number; onChange: (value: number) => void }) {
+  const [text, setText] = useState(value ? String(Math.round(value * 10000) / 100) : '');
+  return (
+    <Input
+      value={text}
+      onChangeText={(t) => {
+        const cleaned = t.replace(/[^0-9.]/g, '');
+        setText(cleaned);
+        onChange(Math.max(0, Math.min(100, Number(cleaned) || 0)) / 100);
+      }}
+      keyboardType="numeric"
+      placeholder="0"
+    />
+  );
+}
+
 function AllocationTab() {
   const { data, palette, currency } = useUi();
   const { setAllocationTargets } = useStore();
   const [editing, setEditing] = useState(false);
   const [draftEntries, setDraftEntries] = useState<Array<{ id: string; key?: AllocationKey; name: string; value: number }>>([]);
 
-  const actual = useMemo(() => actualAllocation(data.investments, data.assets), [data]);
+  const actual = useMemo(() => actualAllocation(data.investments, data.assets), [data.investments, data.assets]);
   const age = data.settings.age;
   const band = age ? bandForAge(age) : null;
   const bandLabel = age ? bandLabelForAge(age) : null;
@@ -821,7 +843,7 @@ function AllocationTab() {
   const removeDraftEntry = (id: string) => {
     setDraftEntries((current) => current.map((entry) =>
       entry.id === id
-        ? { ...entry, value: 0, name: entry.key ? entry.name : entry.name }
+        ? { ...entry, value: 0 }
         : entry,
     ));
   };
@@ -896,14 +918,7 @@ function AllocationTab() {
                 </Field>
               )}
               <Field label="Percent (%)">
-                <Input
-                  value={String(Math.round(entry.value * 100))}
-                  onChangeText={(text) => {
-                    const nextValue = Math.max(0, Math.min(100, Number(text.replace(/[^0-9]/g, '')) || 0)) / 100;
-                    updateDraftEntry(entry.id, { value: nextValue });
-                  }}
-                  keyboardType="numeric"
-                />
+                <PercentInput value={entry.value} onChange={(value) => updateDraftEntry(entry.id, { value })} />
               </Field>
             </View>
           ))}
@@ -918,13 +933,18 @@ function AllocationTab() {
       {drift.length > 0 && (
         <Card>
           <SectionTitle title="Drift & Rebalancing" />
+          {(target?.customTargets?.length ?? 0) > 0 && (
+            <Text style={{ fontSize: 11, color: palette.textMuted, marginBottom: 8 }}>
+              Custom targets can't be matched to holdings, so drift compares your built-in targets rescaled to 100%.
+            </Text>
+          )}
           {drift.map((d) => {
             const investTotal = totalInvestments(data.investments) + data.assets.filter((a) => a.type === 'gold').reduce((s, a) => s + a.value, 0);
             const shiftAmt = d.drift * investTotal;
             return (
               <View key={d.type} style={styles.driftRow}>
                 <View style={{ flex: 1 }}>
-                  <Text style={{ fontSize: 13, fontWeight: '600', color: palette.text, textTransform: 'capitalize' }}>{d.type}</Text>
+                  <Text style={{ fontSize: 13, fontWeight: '600', color: palette.text }}>{ALLOCATION_LABELS[d.type]}</Text>
                   <Text style={{ fontSize: 11, color: palette.textMuted }}>
                     {formatPercent(d.actual, 0)} actual vs {formatPercent(d.target, 0)} target
                   </Text>
@@ -949,21 +969,6 @@ function AllocationTab() {
         <EmptyState title="Set your age first" subtitle="Go to Settings to set your age, which determines your target allocation band." />
       )}
     </View>
-  );
-}
-
-function DeleteConfirmSheet({ name, onCancel, onConfirm }: { name: string; onCancel: () => void; onConfirm: () => void }) {
-  const { palette } = useUi();
-  return (
-    <Sheet visible onClose={onCancel} title="Delete?">
-      <Text style={{ fontSize: 13, color: palette.textMuted, marginBottom: 16 }}>
-        Delete "{name}"? This cannot be undone.
-      </Text>
-      <View style={{ flexDirection: 'row', gap: 12 }}>
-        <Button label="Cancel" variant="outline" onPress={onCancel} style={{ flex: 1 }} />
-        <Button label="Delete" variant="danger" onPress={onConfirm} style={{ flex: 1 }} />
-      </View>
-    </Sheet>
   );
 }
 

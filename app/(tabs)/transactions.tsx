@@ -1,8 +1,10 @@
 import React, { useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, SafeAreaView, Pressable } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Card, SectionTitle, useUi, Chip, Button, Input, Field, EmptyState, StatusBadge, LifecycleActions } from '@/components/ui';
 import { DonutChart } from '@/components/charts';
 import { Sheet } from '@/components/Sheet';
+import { ConfirmDeleteSheet } from '@/components/ConfirmDeleteSheet';
 import { useStore } from '@/lib/store';
 import { computeTotals, monthKey, yearKey, inPeriod, groupByPeriod, recurringTransactionsThrough } from '@/lib/calc';
 import { formatMoney, isValidIsoDate, todayISO, monthLabel } from '@/lib/format';
@@ -35,9 +37,9 @@ export default function TransactionsScreen() {
 
   const recurring = useMemo(
     () => data.transactions.filter((t) => t.recurring !== 'none' && (filter === 'all' || t.type === filter)),
-    [data, filter],
+    [data.transactions, filter],
   );
-  const catMap = useMemo(() => new Map(data.categories.map((c) => [c.id, c])), [data]);
+  const catMap = useMemo(() => new Map(data.categories.map((c) => [c.id, c])), [data.categories]);
 
   const breakdown = useMemo(() => {
     const txns = filter === 'all' ? periodTxns : periodTxns.filter((t) => t.type === filter);
@@ -62,7 +64,7 @@ export default function TransactionsScreen() {
   const showSavingsCard = filter === 'all';
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: palette.bg }]}>
+    <SafeAreaView edges={['top', 'left', 'right']} style={[styles.container, { backgroundColor: palette.bg }]}>
       <View style={styles.header}>
         <Text style={[styles.screenTitle, { color: palette.text }]}>Transactions</Text>
         <Pressable style={[styles.fab, { backgroundColor: palette.primary }]} onPress={() => setSheetOpen(true)}>
@@ -154,7 +156,7 @@ export default function TransactionsScreen() {
                     onReopen={() => setTransactionStatus(t.id, 'active')}
                   />
                 </View>
-                <Pressable onPress={() => setPendingDelete(t)} hitSlop={8}>
+                <Pressable onPress={() => setPendingDelete(t)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Delete">
                   <Trash2 size={16} color={palette.danger} />
                 </Pressable>
               </View>
@@ -188,10 +190,10 @@ export default function TransactionsScreen() {
                         <Text style={[styles.txnAmt, { color: t.type === 'income' ? palette.success : palette.text }]}>
                           {t.type === 'income' ? '+' : '-'}{formatMoney(t.amount, currency, { compact: true })}
                         </Text>
-                        <Pressable onPress={(event) => { event.stopPropagation(); setEditTxn(t.recurringRef ? data.transactions.find((source) => source.id === t.recurringRef) || t : t); }} hitSlop={8}>
+                        <Pressable onPress={(event) => { event.stopPropagation(); setEditTxn(t.recurringRef ? data.transactions.find((source) => source.id === t.recurringRef) || t : t); }} hitSlop={8} accessibilityRole="button" accessibilityLabel="Edit">
                           <Pencil size={15} color={palette.textMuted} />
                         </Pressable>
-                        <Pressable onPress={(event) => { event.stopPropagation(); setPendingDelete(data.transactions.find((source) => source.id === (t.recurringRef || t.id)) || t); }} hitSlop={8}>
+                        <Pressable onPress={(event) => { event.stopPropagation(); setPendingDelete(data.transactions.find((source) => source.id === (t.recurringRef || t.id)) || t); }} hitSlop={8} accessibilityRole="button" accessibilityLabel="Delete">
                           <X size={16} color={palette.textMuted} />
                         </Pressable>
                       </Pressable>
@@ -217,7 +219,9 @@ export default function TransactionsScreen() {
         />
       )}
       {pendingDelete && (
-        <DeleteConfirmSheet
+        <ConfirmDeleteSheet
+          title="Delete transaction?"
+          message={pendingDelete.recurring !== 'none' ? 'A recurring schedule deletes all of its projected occurrences. This cannot be undone.' : undefined}
           name={pendingDelete.note || data.categories.find((category) => category.id === pendingDelete.categoryId)?.name || 'this transaction'}
           onCancel={() => setPendingDelete(null)}
           onConfirm={() => { deleteTransaction(pendingDelete.id); setPendingDelete(null); }}
@@ -238,7 +242,7 @@ function TransactionSheet({
   onAdd: (t: Omit<Transaction, 'id'>) => void;
   categories: Category[];
 }) {
-  const { palette, currency } = useUi();
+  const { palette } = useUi();
   const [type, setType] = useState<TxnType>('expense');
   const [amount, setAmount] = useState('');
   const [categoryId, setCategoryId] = useState('');
@@ -267,7 +271,7 @@ function TransactionSheet({
         <Chip label="Expense" selected={type === 'expense'} onPress={() => { setType('expense'); setCategoryId(''); }} />
         <Chip label="Income" selected={type === 'income'} onPress={() => { setType('income'); setCategoryId(''); }} />
       </View>
-      <Field label="Amount">
+      <Field money label="Amount">
         <Input value={amount} onChangeText={(t) => setAmount(t.replace(/[^0-9.]/g, ''))} keyboardType="numeric" placeholder="0" />
       </Field>
       <Field label="Category">
@@ -309,7 +313,7 @@ function EditTransactionSheet({
   onDelete: (id: string) => void;
   categories: Category[];
 }) {
-  const { palette, currency } = useUi();
+  const { palette } = useUi();
   const [type, setType] = useState<TxnType>(txn.type);
   const [amount, setAmount] = useState(String(txn.amount));
   const [categoryId, setCategoryId] = useState(txn.categoryId);
@@ -338,7 +342,7 @@ function EditTransactionSheet({
         <Chip label="Expense" selected={type === 'expense'} onPress={() => { setType('expense'); setCategoryId(''); }} />
         <Chip label="Income" selected={type === 'income'} onPress={() => { setType('income'); setCategoryId(''); }} />
       </View>
-      <Field label="Amount">
+      <Field money label="Amount">
         <Input value={amount} onChangeText={(t) => setAmount(t.replace(/[^0-9.]/g, ''))} keyboardType="numeric" placeholder="0" />
       </Field>
       <Field label="Category">
@@ -377,21 +381,6 @@ function EditTransactionSheet({
       ) : (
         <Button label="Delete Transaction" variant="danger" onPress={() => setConfirmDelete(true)} style={{ marginTop: 8 }} />
       )}
-    </Sheet>
-  );
-}
-
-function DeleteConfirmSheet({ name, onCancel, onConfirm }: { name: string; onCancel: () => void; onConfirm: () => void }) {
-  const { palette } = useUi();
-  return (
-    <Sheet visible onClose={onCancel} title="Delete transaction?">
-      <Text style={{ fontSize: 13, color: palette.textMuted, marginBottom: 16 }}>
-        Delete "{name}"? A recurring schedule deletes all of its projected occurrences. This cannot be undone.
-      </Text>
-      <View style={{ flexDirection: 'row', gap: 12 }}>
-        <Button label="Cancel" variant="outline" onPress={onCancel} style={{ flex: 1 }} />
-        <Button label="Delete" variant="danger" onPress={onConfirm} style={{ flex: 1 }} />
-      </View>
     </Sheet>
   );
 }

@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, SafeAreaView } from 'react-native';
+import { View, Text, StyleSheet, ScrollView } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Card, SectionTitle, useUi, Chip, RiskBadge, EmptyState } from '@/components/ui';
 import { BarChart, DonutChart, Gauge } from '@/components/charts';
 import {
@@ -13,11 +14,12 @@ import {
   bandForAge,
   bandLabelForAge,
   allocationDrift,
+  ALLOCATION_LABELS,
   lifestyleInflation,
   inPeriod,
   recurringTransactionsThrough,
 } from '@/lib/calc';
-import { formatMoney, formatPercent, todayISO, monthLabel } from '@/lib/format';
+import { formatMoney, formatPercent, todayISO, monthLabel, isBackupDue } from '@/lib/format';
 import { TrendingUp, Shield } from 'lucide-react-native';
 
 export default function DashboardScreen() {
@@ -50,13 +52,13 @@ export default function DashboardScreen() {
   const invest = totalInvestments(data.investments);
   const debt = totalDebt(data.debts);
 
-  const actual = useMemo(() => actualAllocation(data.investments, data.assets), [data]);
+  const actual = useMemo(() => actualAllocation(data.investments, data.assets), [data.investments, data.assets]);
   const bandLabel = data.settings.age ? bandLabelForAge(data.settings.age) : null;
   const targetAlloc = data.settings.allocationTargets || (data.settings.age ? bandForAge(data.settings.age) : null);
   const drift = targetAlloc ? allocationDrift(actual, targetAlloc) : [];
   const lifeInfl = useMemo(() => lifestyleInflation(transactions, data.categories), [transactions, data.categories]);
 
-  const catMap = useMemo(() => new Map(data.categories.map((c) => [c.id, c])), [data]);
+  const catMap = useMemo(() => new Map(data.categories.map((c) => [c.id, c])), [data.categories]);
 
   const expenseBreakdown = useMemo(() => {
     const map: Record<string, number> = {};
@@ -80,13 +82,13 @@ export default function DashboardScreen() {
     const map: Record<string, number> = {};
     data.assets.forEach((a) => { map[a.type] = (map[a.type] || 0) + a.value; });
     return Object.entries(map).map(([type, value]) => ({ type, value })).sort((a, b) => b.value - a.value);
-  }, [data]);
+  }, [data.assets]);
 
   const debtBreakdown = useMemo(() => {
     const map: Record<string, number> = {};
     data.debts.filter((d) => d.status !== 'closed').forEach((d) => { map[d.type] = (map[d.type] || 0) + d.outstanding; });
     return Object.entries(map).map(([type, value]) => ({ type, value })).sort((a, b) => b.value - a.value);
-  }, [data]);
+  }, [data.debts]);
 
   const hasData = data.transactions.length > 0 || assets > 0 || invest > 0 || debt > 0;
   const periodLabel = period === 'monthly' ? 'this month' : 'this year';
@@ -96,7 +98,7 @@ export default function DashboardScreen() {
 
   if (!hasData) {
     return (
-      <SafeAreaView style={[styles.container, { backgroundColor: palette.bg }]}>
+      <SafeAreaView edges={['top', 'left', 'right']} style={[styles.container, { backgroundColor: palette.bg }]}>
         <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
           <Text style={[styles.hello, { color: palette.textMuted }]}>Your finances at a glance</Text>
           <Card style={styles.emptyDashboardCard}>
@@ -108,9 +110,18 @@ export default function DashboardScreen() {
   }
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: palette.bg }]}>
+    <SafeAreaView edges={['top', 'left', 'right']} style={[styles.container, { backgroundColor: palette.bg }]}>
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <Text style={[styles.hello, { color: palette.textMuted }]}>Your finances at a glance</Text>
+
+        {isBackupDue(data.settings.backupFreq, data.settings.lastBackupDate, today) && (
+          <Card style={{ borderColor: palette.warning }}>
+            <Text style={{ fontSize: 13, fontWeight: '700', color: palette.warning }}>Backup due</Text>
+            <Text style={{ fontSize: 12, color: palette.textMuted, marginTop: 2 }}>
+              {data.settings.lastBackupDate ? `Last export was ${data.settings.lastBackupDate}.` : "You haven't exported a backup yet."} Export one from Settings.
+            </Text>
+          </Card>
+        )}
 
         {/* Net worth headline */}
         <Card style={styles.netCard}>
@@ -229,7 +240,7 @@ export default function DashboardScreen() {
               <View style={styles.driftList}>
                 {drift.filter((d) => Math.abs(d.drift) > 0.05).map((d) => (
                   <View key={d.type} style={styles.driftRow}>
-                    <Text style={[styles.driftType, { color: palette.text }]}>{d.type}</Text>
+                    <Text style={[styles.driftType, { color: palette.text }]}>{ALLOCATION_LABELS[d.type]}</Text>
                     <Text style={[styles.driftVal, { color: d.drift > 0 ? palette.warning : palette.success }]}>
                       {d.drift > 0 ? '+' : ''}{formatPercent(d.drift, 0)} vs target
                     </Text>
@@ -268,9 +279,9 @@ export default function DashboardScreen() {
               color={palette.danger}
             />
             <View style={styles.legendList}>
-              {expenseBreakdown.map((b, i) => (
+              {expenseBreakdown.map((b) => (
                 <View key={b.id} style={styles.legendRow}>
-                  <View style={[styles.legendDot, { backgroundColor: palette.chart[i % palette.chart.length] }]} />
+                  <View style={[styles.legendDot, { backgroundColor: palette.danger }]} />
                   <Text style={{ fontSize: 12, flex: 1, color: palette.text }}>{b.name}</Text>
                   <Text style={{ fontSize: 12, fontWeight: '700', color: palette.danger }}>{formatMoney(b.amount, currency, { compact: true })}</Text>
                 </View>
@@ -384,7 +395,7 @@ const styles = StyleSheet.create({
   bandTag: { fontSize: 11 },
   driftList: { marginTop: 12, gap: 6 },
   driftRow: { flexDirection: 'row', justifyContent: 'space-between' },
-  driftType: { fontSize: 12, textTransform: 'capitalize' },
+  driftType: { fontSize: 12 },
   driftVal: { fontSize: 12, fontWeight: '600' },
   emptyDashboardCard: { marginTop: 10 },
 });

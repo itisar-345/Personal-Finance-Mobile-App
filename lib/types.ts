@@ -5,6 +5,12 @@ export type RecurringType = 'none' | 'monthly' | 'yearly';
 /** Lifecycle status for any trackable item. */
 export type ItemStatus = 'active' | 'paused' | 'closed';
 
+/** A window during which a recurring item was paused/closed; no occurrences fall strictly inside it. */
+export interface SkippedRange {
+  from: string;
+  to: string;
+}
+
 export interface Category {
   id: string;
   name: string;
@@ -32,6 +38,8 @@ export interface Transaction {
   pausedDate?: string;
   /** ISO date when closed/cleared */
   closedDate?: string;
+  /** Past pause/close windows that ended when the item was resumed or reopened. */
+  skipped?: SkippedRange[];
 }
 
 export type AssetType = 'cash' | 'bank' | 'realestate' | 'gold' | 'other';
@@ -66,6 +74,8 @@ export interface Investment {
   status: ItemStatus;
   pausedDate?: string;
   closedDate?: string;
+  /** Past pause/close windows that ended when the item was resumed or reopened. */
+  skipped?: SkippedRange[];
 }
 
 export type DebtType = 'loan' | 'creditcard' | 'emi';
@@ -83,6 +93,8 @@ export interface Debt {
   status: ItemStatus;
   pausedDate?: string;
   closedDate?: string;
+  /** Past pause/close windows that ended when the item was resumed or reopened. */
+  skipped?: SkippedRange[];
 }
 
 /** Contribution entry — one-time or recurring — linked to a holding. */
@@ -103,6 +115,8 @@ export interface Contribution {
   status: ItemStatus;
   pausedDate?: string;
   closedDate?: string;
+  /** Past pause/close windows that ended when the item was resumed or reopened. */
+  skipped?: SkippedRange[];
   note?: string;
 }
 
@@ -156,6 +170,9 @@ export interface Settings {
   currencies: Currency[];
   theme: 'light' | 'dark' | 'system';
   pin: string | null;
+  /** Consecutive wrong PIN entries, and when the lockout after too many of them ends (epoch ms). */
+  pinFailedAttempts: number;
+  pinLockedUntil: number | null;
   age: number | null;
   allocationTargets: AllocationTarget | null;
   expectedReturn: number; // assumed annual return % for goal projections
