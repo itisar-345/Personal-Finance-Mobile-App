@@ -178,6 +178,18 @@ export default function SettingsScreen() {
           </Pressable>
         </Card>
 
+        {/* Payments & cash */}
+        <Card>
+          <SectionTitle title="Payments & Cash" />
+          <Pressable style={styles.rowAction} onPress={() => updateSettings({ linkPaymentsToCash: !settings.linkPaymentsToCash })}>
+            <Text style={{ fontSize: 14, color: palette.text }}>Deduct EMIs & SIPs from cash</Text>
+            <Text style={{ fontSize: 14, color: palette.textMuted }}>{settings.linkPaymentsToCash ? 'On' : 'Off'}</Text>
+          </Pressable>
+          <Text style={{ fontSize: 11, color: palette.textMuted, marginTop: 4 }}>
+            When on, EMIs and SIP instalments that fall due reduce your liquid assets from {settings.cashLinkStart ?? 'the day you switch it on'}. Leave it off if you already record these as expenses or update balances by hand.
+          </Text>
+        </Card>
+
         {/* Reminders */}
         <Card>
           <SectionTitle title="Reminders" action={<Bell size={16} color={palette.textMuted} />} />
@@ -221,7 +233,7 @@ export default function SettingsScreen() {
             </View>
           </View>
           <Text style={{ fontSize: 11, color: palette.textMuted, marginTop: 4 }}>
-            Your data is stored only on this device. A periodic reminder helps you export a backup so you don't lose everything if the device is lost or reset.
+            Your data lives only on this device, so export a backup now and then.
           </Text>
 
           {settings.lastBackupDate ? (
@@ -240,29 +252,18 @@ export default function SettingsScreen() {
             <Button label="Export Transactions (CSV)" variant="outline" onPress={doExportCsv} style={styles.dataBtn} />
             <Button label="Reset All Data" variant="danger" onPress={confirmReset} style={styles.dataBtn} />
           </View>
-          <Text style={{ fontSize: 11, color: palette.textMuted, marginTop: 8 }}>
-            JSON backup includes everything: transactions, assets, investments, debts, goals, categories, and settings.
-          </Text>
         </Card>
 
-        {/* Categories */}
+        {/* General */}
         <Card>
-          <SectionTitle title="Categories" action={<Tag size={16} color={palette.textMuted} />} />
+          <SectionTitle title="General" action={<Tag size={16} color={palette.textMuted} />} />
           <Pressable style={styles.rowAction} onPress={() => setCategorySheet(true)}>
-            <Text style={{ fontSize: 14, color: palette.text }}>Manage transaction categories</Text>
+            <Text style={{ fontSize: 14, color: palette.text }}>Manage categories</Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
               <Text style={{ fontSize: 14, color: palette.textMuted }}>{data.categories.length}</Text>
               <ChevronRight size={18} color={palette.textMuted} />
             </View>
           </Pressable>
-          <Text style={{ fontSize: 11, color: palette.textMuted, marginTop: 4 }}>
-            Add, rename, or delete the categories used to tag your income and expenses.
-          </Text>
-        </Card>
-
-        {/* About */}
-        <Card>
-          <SectionTitle title="About" action={<Info size={16} color={palette.textMuted} />} />
           <Pressable style={styles.rowAction} onPress={() => setAboutSheet(true)}>
             <Text style={{ fontSize: 14, color: palette.text }}>About FinTrack & Help</Text>
             <ChevronRight size={18} color={palette.textMuted} />
@@ -337,11 +338,12 @@ function PinSheet({ visible, onClose }: { visible: boolean; onClose: () => void 
 }
 
 function AgeSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
-  const { data } = useUi();
+  const { data, palette } = useUi();
   const { updateSettings } = useStore();
   const [age, setAge] = useState(String(data.settings.age ?? ''));
 
   const save = () => {
+    if (age === '') { updateSettings({ age: null }); onClose(); return; }
     const n = Number(age);
     if (!n || n < 18) return;
     updateSettings({ age: n });
@@ -353,6 +355,7 @@ function AgeSheet({ visible, onClose }: { visible: boolean; onClose: () => void 
       <Field label="Age">
         <Input value={age} onChangeText={(t) => setAge(t.replace(/[^0-9]/g, '').slice(0, 3))} keyboardType="numeric" placeholder="e.g. 30" />
       </Field>
+      <Text style={{ fontSize: 11, color: palette.textMuted }}>Leave blank to clear. Age must be 18 or over.</Text>
       <Button label="Save" onPress={save} style={{ marginTop: 8 }} />
     </Sheet>
   );
@@ -373,7 +376,7 @@ function ReturnRateSheet({ visible, onClose }: { visible: boolean; onClose: () =
   return (
     <Sheet visible={visible} onClose={onClose} title="Expected Annual Return">
       <Text style={{ fontSize: 12, color: '#888', marginBottom: 8 }}>
-        Used to project how much you need to save monthly toward your goals. Default is 10%.
+        Used to project how much you need to save monthly toward your goals. Default is 10% nominal (before tax and inflation) for a blended equity and debt mix; equities have averaged roughly 12% nominal in India, debt and FDs less.
       </Text>
       <Field label="Annual return %">
         <Input value={rate} onChangeText={(t) => setRate(t.replace(/[^0-9.]/g, ''))} keyboardType="numeric" placeholder="10" />
@@ -391,6 +394,29 @@ function RateSheet({ visible, onClose }: { visible: boolean; onClose: () => void
   );
 
   const [rateError, setRateError] = useState<string | null>(null);
+  const [newCode, setNewCode] = useState('');
+  const [newSymbol, setNewSymbol] = useState('');
+  const [newRate, setNewRate] = useState('');
+
+  const addCurrency = () => {
+    const code = newCode.trim().toUpperCase();
+    const rate = Number(newRate);
+    if (!/^[A-Z]{3}$/.test(code)) { setRateError('Use a 3-letter currency code, e.g. AED.'); return; }
+    if (data.settings.currencies.some((c) => c.code === code)) { setRateError(`${code} is already in your list.`); return; }
+    if (!newSymbol.trim()) { setRateError('Enter a symbol, e.g. د.إ'); return; }
+    if (!rate || rate <= 0) { setRateError('Enter how many units of the new currency equal 1 INR.'); return; }
+    updateSettings({ currencies: [...data.settings.currencies, { code, symbol: newSymbol.trim(), rate }] });
+    setNewCode(''); setNewSymbol(''); setNewRate(''); setRateError(null);
+  };
+
+  const removeCurrency = (code: string) => {
+    updateSettings({
+      currencies: data.settings.currencies.filter((c) => c.code !== code),
+      // Never leave the app displaying a currency that no longer exists.
+      ...(data.settings.currencyCode === code ? { currencyCode: 'INR' } : {}),
+    });
+    setRateError(null);
+  };
 
   const save = () => {
     for (const c of data.settings.currencies) {
@@ -417,17 +443,44 @@ function RateSheet({ visible, onClose }: { visible: boolean; onClose: () => void
         Set the conversion rate from your base currency (INR = 1). Update manually whenever you like — no live API.
       </Text>
       {data.settings.currencies.filter((c) => c.code !== 'INR').map((c) => (
-        <Field key={c.code} label={`1 INR = ? ${c.code}`}>
-          <Input
-            value={rates[c.code] ?? ''}
-            onChangeText={(t) => setRates((r) => ({ ...r, [c.code]: t.replace(/[^0-9.]/g, '') }))}
-            keyboardType="numeric"
-            placeholder={String(c.rate)}
-          />
-        </Field>
+        <View key={c.code} style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 10 }}>
+          <View style={{ flex: 1 }}>
+            <Field label={`1 INR = ? ${c.code} (${c.symbol})`}>
+              <Input
+                value={rates[c.code] ?? ''}
+                onChangeText={(t) => setRates((r) => ({ ...r, [c.code]: t.replace(/[^0-9.]/g, '') }))}
+                keyboardType="numeric"
+                placeholder={String(c.rate)}
+              />
+            </Field>
+          </View>
+          <Pressable onPress={() => removeCurrency(c.code)} hitSlop={8} accessibilityRole="button" accessibilityLabel={`Remove ${c.code}`} style={{ paddingBottom: 14 }}>
+            <Trash2 size={18} color={palette.danger} />
+          </Pressable>
+        </View>
       ))}
       {rateError && <Text style={{ fontSize: 12, color: palette.danger, marginBottom: 4 }}>{rateError}</Text>}
       <Button label="Save Rates" onPress={save} style={{ marginTop: 8 }} />
+
+      <Text style={{ fontSize: 13, fontWeight: '700', color: palette.text, marginTop: 20, marginBottom: 8 }}>Add a currency</Text>
+      <View style={{ flexDirection: 'row', gap: 8 }}>
+        <View style={{ flex: 1 }}>
+          <Field label="Code">
+            <Input value={newCode} onChangeText={(t) => setNewCode(t.replace(/[^a-zA-Z]/g, '').slice(0, 3).toUpperCase())} autoCapitalize="characters" placeholder="AED" />
+          </Field>
+        </View>
+        <View style={{ flex: 1 }}>
+          <Field label="Symbol">
+            <Input value={newSymbol} onChangeText={(t) => setNewSymbol(t.slice(0, 4))} placeholder="د.إ" />
+          </Field>
+        </View>
+        <View style={{ flex: 1 }}>
+          <Field label="Per 1 INR">
+            <Input value={newRate} onChangeText={(t) => setNewRate(t.replace(/[^0-9.]/g, ''))} keyboardType="numeric" placeholder="0.04" />
+          </Field>
+        </View>
+      </View>
+      <Button label="Add Currency" variant="outline" onPress={addCurrency} />
     </Sheet>
   );
 }
@@ -657,6 +710,8 @@ function CategorySheet({ visible, onClose }: { visible: boolean; onClose: () => 
   const { data, addCategory, updateCategory, deleteCategory } = useStore();
   const [name, setName] = useState('');
   const [type, setType] = useState<'income' | 'expense'>('expense');
+  const [fixed, setFixed] = useState(false);
+  const [need, setNeed] = useState(false);
   const [editing, setEditing] = useState<Category | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Category | null>(null);
@@ -669,30 +724,45 @@ function CategorySheet({ visible, onClose }: { visible: boolean; onClose: () => 
       setError('A category with this name already exists.');
       return;
     }
-    addCategory({ name: trimmed, type });
+    addCategory({ name: trimmed, type, custom: true, ...(type === 'expense' ? { fixed, need } : {}) });
     setName('');
+    setFixed(false);
+    setNeed(false);
     setError(null);
   };
 
+  // A category in use can still be deleted: its transactions move to another category of the same type.
+  const fallbackFor = (cat: Category) => data.categories.find((c) => c.id !== cat.id && c.type === cat.type);
+  const usageCount = (cat: Category) => data.transactions.filter((t) => t.categoryId === cat.id).length;
+
   const handleDelete = (cat: Category) => {
-    const inUse = data.transactions.some((t) => t.categoryId === cat.id);
-    if (inUse) {
-      setError(`"${cat.name}" is used by existing transactions. Remove or reassign those transactions first.`);
+    if (usageCount(cat) > 0 && !fallbackFor(cat)) {
+      setError(`"${cat.name}" is your only ${cat.type} category and has transactions. Add another ${cat.type} category first.`);
       return;
     }
+    setError(null);
     setPendingDelete(cat);
+  };
+
+  const deleteNote = (cat: Category) => {
+    const used = usageCount(cat);
+    return used > 0 ? ` Its ${used} transaction${used === 1 ? '' : 's'} will move to "${fallbackFor(cat)?.name}".` : '';
   };
 
   const startEdit = (cat: Category) => {
     setEditing(cat);
     setName(cat.name);
     setType(cat.type);
+    setFixed(!!cat.fixed);
+    setNeed(!!cat.need);
     setError(null);
   };
 
   const cancelEdit = () => {
     setEditing(null);
     setName('');
+    setFixed(false);
+    setNeed(false);
     setError(null);
   };
 
@@ -708,7 +778,7 @@ function CategorySheet({ visible, onClose }: { visible: boolean; onClose: () => 
       setError('A category with this name already exists.');
       return;
     }
-    if (editing) updateCategory(editing.id, { name: trimmed, type });
+    if (editing) updateCategory(editing.id, { name: trimmed, type, ...(type === 'expense' ? { fixed, need } : { fixed: undefined, need: undefined }) });
     cancelEdit();
   };
 
@@ -719,7 +789,12 @@ function CategorySheet({ visible, onClose }: { visible: boolean; onClose: () => 
     <View key={cat.id} style={[styles.catRow, { borderBottomColor: palette.border }]}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
         <Tag size={14} color={cat.type === 'income' ? palette.success : palette.danger} />
-        <Text style={{ fontSize: 14, color: palette.text }}>{cat.name}</Text>
+        <View>
+          <Text style={{ fontSize: 14, color: palette.text }}>{cat.name}</Text>
+          {cat.type === 'expense' && (
+            <Text style={{ fontSize: 11, color: palette.textMuted }}>{cat.fixed ? 'Fixed' : 'Variable'} · {cat.need ? 'Need' : 'Want'}</Text>
+          )}
+        </View>
       </View>
       <Pressable onPress={() => startEdit(cat)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Edit">
         <Pencil size={16} color={palette.primary} />
@@ -741,15 +816,34 @@ function CategorySheet({ visible, onClose }: { visible: boolean; onClose: () => 
           <Chip label="Income" selected={type === 'income'} onPress={() => setType('income')} />
         </View>
       </Field>
+      {type === 'expense' && (
+        <>
+          <Field label="Cost pattern">
+            <View style={styles.chipRow}>
+              <Chip label="Variable" selected={!fixed} onPress={() => setFixed(false)} />
+              <Chip label="Fixed" selected={fixed} onPress={() => setFixed(true)} />
+            </View>
+          </Field>
+          <Field label="Priority">
+            <View style={styles.chipRow}>
+              <Chip label="Want" selected={!need} onPress={() => setNeed(false)} />
+              <Chip label="Need" selected={need} onPress={() => setNeed(true)} />
+            </View>
+          </Field>
+        </>
+      )}
       {error && <Text style={{ fontSize: 12, color: palette.danger, marginBottom: 8 }}>{error}</Text>}
       {pendingDelete && (
         <View style={[styles.aboutCard, { backgroundColor: palette.danger + '11', borderColor: palette.danger + '44', marginBottom: 8 }]}>
           <Text style={{ fontSize: 13, color: palette.danger, fontWeight: '600', marginBottom: 8 }}>
-            Remove "{pendingDelete.name}"?
+            Remove "{pendingDelete.name}"?{deleteNote(pendingDelete)}
           </Text>
           <View style={{ flexDirection: 'row', gap: 10 }}>
             <Button label="Cancel" variant="outline" onPress={() => setPendingDelete(null)} style={{ flex: 1 }} />
-            <Button label="Delete" variant="danger" onPress={() => { deleteCategory(pendingDelete.id); setPendingDelete(null); }} style={{ flex: 1 }} />
+            <Button label="Delete" variant="danger" onPress={() => {
+              if (!deleteCategory(pendingDelete.id)) setError(`"${pendingDelete.name}" is your only ${pendingDelete.type} category and has transactions. Add another ${pendingDelete.type} category first.`);
+              setPendingDelete(null);
+            }} style={{ flex: 1 }} />
           </View>
         </View>
       )}

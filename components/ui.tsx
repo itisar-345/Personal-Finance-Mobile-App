@@ -113,15 +113,16 @@ export function Chip({
 }
 
 /**
+ * `half` sizes the field to share a row equally (put two in a row View); without it the second one overflows.
  * `money` marks an amount input. Amounts are always entered in the base currency (rate 1), so when a
  * different display currency is selected the label says so instead of silently misreading the number.
  */
-export function Field({ label, money, children }: { label: string; money?: boolean; children: React.ReactNode }) {
+export function Field({ label, money, half, children }: { label: string; money?: boolean; half?: boolean; children: React.ReactNode }) {
   const { palette, currency, settings } = useUi();
   const base = settings.currencies.find((c) => c.rate === 1);
   const suffix = money && base && base.code !== currency.code ? ` (in ${base.symbol} ${base.code})` : '';
   return (
-    <View style={styles.field}>
+    <View style={[styles.field, half && styles.fieldHalf]}>
       <Text style={[styles.fieldLabel, { color: palette.textMuted }]}>{label}{suffix}</Text>
       {children}
     </View>
@@ -234,6 +235,7 @@ const styles = StyleSheet.create({
   chipText: { fontSize: 13, fontWeight: '600' },
   chipDot: { width: 8, height: 8, borderRadius: 4 },
   field: { marginBottom: 12 },
+  fieldHalf: { flex: 1, minWidth: 0 },
   fieldLabel: { fontSize: 13, fontWeight: '600', marginBottom: 6 },
   input: { borderRadius: 12, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 10, fontSize: 15 },
   empty: { padding: 32, alignItems: 'center' },

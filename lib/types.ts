@@ -72,6 +72,8 @@ export interface Investment {
   /** ISO date string of purchase */
   purchaseDate: string;
   status: ItemStatus;
+  /** Date `currentValue` was last entered; contributions made after it are added on top when displaying. */
+  valueUpdatedDate?: string;
   pausedDate?: string;
   closedDate?: string;
   /** Past pause/close windows that ended when the item was resumed or reopened. */
@@ -128,6 +130,8 @@ export interface Goal {
   /** ISO date string */
   targetDate: string;
   monthlyContribution: number;
+  /** Asset/investment ids this goal tracks; when set, saved amount and monthly contribution are derived from them. */
+  linkedIds?: string[];
   kind: 'retirement' | 'house' | 'emergency' | 'other';
 }
 
@@ -180,7 +184,10 @@ export interface Settings {
   reminderEnabled: boolean;
   backupFreq: 'none' | 'weekly' | 'monthly';
   lastBackupDate: string | null;
-  plan: 'free' | 'paid';
+  /** Deduct EMI and SIP payments falling due from liquid assets (for users who don't log them as transactions). */
+  linkPaymentsToCash: boolean;
+  /** Payments after this date are deducted; set when linking is switched on. */
+  cashLinkStart: string | null;
 }
 
 export interface AppData {

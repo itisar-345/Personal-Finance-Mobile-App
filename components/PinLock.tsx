@@ -78,7 +78,7 @@ export function PinLock({ onUnlock }: { onUnlock: () => void }) {
       <View style={styles.pad}>
         {['1','2','3','4','5','6','7','8','9','','0','⌫'].map((d, i) =>
           d === '' ? (
-            <View key={i} style={styles.key} />
+            <View key={i} style={styles.keyEmpty} />
           ) : (
             <Pressable key={i} disabled={locked} accessibilityRole="button" accessibilityLabel={d === '⌫' ? 'Delete digit' : d} style={[styles.key, { backgroundColor: palette.surface, borderColor: palette.border }]} onPress={() => (d === '⌫' ? setEntry((e) => e.slice(0, -1)) : press(d))}>
               <Text style={[styles.keyText, { color: palette.text }]}>{d}</Text>
@@ -98,5 +98,6 @@ const styles = StyleSheet.create({
   error: { fontSize: 13, marginBottom: 16 },
   pad: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', width: 240, gap: 12 },
   key: { width: 64, height: 64, borderRadius: 32, alignItems: 'center', justifyContent: 'center', borderWidth: 1 },
+  keyEmpty: { width: 64, height: 64 },
   keyText: { fontSize: 24, fontWeight: '600' },
 });

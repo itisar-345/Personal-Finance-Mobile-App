@@ -12,19 +12,17 @@ import {
   totalDebt,
   monthlyDebtPayments,
   netWorth,
+  withLiveData,
   actualAllocation,
   bandForAge,
   bandLabelForAge,
   allocationDrift,
-  cagr,
   debtPayoffMonths,
-  debtStrategies,
   totalContributed,
+  investmentXirr,
   monthlyContribution,
-  groupByPeriod,
   allocationTargetEntries,
   ALLOCATION_LABELS,
-  type PeriodMode,
 } from '@/lib/calc';
 import { formatMoney, formatPercent, isValidIsoDate, todayISO } from '@/lib/format';
 import { Trash2, Pencil } from 'lucide-react-native';
@@ -62,13 +60,13 @@ function AssetsTab() {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editingAsset, setEditingAsset] = useState<Asset | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Asset | null>(null);
-  const [period, setPeriod] = useState<PeriodMode>('monthly');
-  const assetsTotal = totalAssets(data.assets);
-  const investTotal = totalInvestments(data.investments);
-  const debtTotal = totalDebt(data.debts);
-  const nw = netWorth(data);
-  const liquid = data.assets.filter((a) => a.liquid).reduce((s, a) => s + a.value, 0);
-  const monthlyDebt = monthlyDebtPayments(data.debts);
+  const liveData = useMemo(() => withLiveData(data, todayISO()), [data]);
+  const assetsTotal = totalAssets(liveData.assets);
+  const investTotal = totalInvestments(liveData.investments);
+  const debtTotal = totalDebt(liveData.debts);
+  const nw = netWorth(liveData);
+  const liquid = liveData.assets.filter((a) => a.liquid).reduce((s, a) => s + a.value, 0);
+  const monthlyDebt = monthlyDebtPayments(liveData.debts);
 
   const donutData = [
     { label: 'Assets', value: assetsTotal, color: palette.chart[1] },
@@ -76,7 +74,7 @@ function AssetsTab() {
     { label: 'Debts', value: debtTotal, color: palette.danger },
   ].filter((d) => d.value > 0);
 
-  const grouped = useMemo(() => groupByPeriod(data.assets, period), [data.assets, period]);
+  const sortedAssets = useMemo(() => [...liveData.assets].sort((a, b) => b.date.localeCompare(a.date)), [liveData.assets]);
 
   return (
     <View style={{ gap: 14 }}>
@@ -128,11 +126,6 @@ function AssetsTab() {
         </Card>
       )}
 
-      <View style={styles.tabRow}>
-        <Chip label="Monthly" selected={period === 'monthly'} onPress={() => setPeriod('monthly')} />
-        <Chip label="Yearly" selected={period === 'annual'} onPress={() => setPeriod('annual')} />
-      </View>
-
       <Card>
         <SectionTitle title="Asset List" action={
           <Pressable onPress={() => setSheetOpen(true)}>
@@ -142,27 +135,22 @@ function AssetsTab() {
         {data.assets.length === 0 ? (
           <EmptyState title="No assets yet" subtitle="Add cash, bank balances, real estate, gold, and more." />
         ) : (
-          grouped.map((group) => (
-            <View key={group.key}>
-              <Text style={[styles.groupHeader, { color: palette.textMuted }]}>{group.label}</Text>
-              {group.items.map((a) => (
-                <View key={a.id} style={styles.itemRow}>
-                  <View style={[styles.typeDot, { backgroundColor: palette.chart[assetTypeIndex(a.type)] }]} />
-                  <View style={{ flex: 1 }}>
-                    <View style={styles.nameRow}>
-                      <Text style={{ fontSize: 14, fontWeight: '600', color: palette.text }}>{a.name}</Text>
-                    </View>
-                    <Text style={{ fontSize: 11, color: palette.textMuted }}>{a.type} · {a.liquid ? 'Liquid' : 'Illiquid'}</Text>
-                  </View>
-                  <Text style={{ fontSize: 14, fontWeight: '700', color: palette.text }}>{formatMoney(a.value, currency, { compact: true })}</Text>
-                  <Pressable onPress={() => setEditingAsset(a)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Edit">
-                    <Pencil size={16} color={palette.primary} />
-                  </Pressable>
-                  <Pressable onPress={() => setPendingDelete(a)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Delete">
-                    <Trash2 size={16} color={palette.danger} />
-                  </Pressable>
+          sortedAssets.map((a) => (
+            <View key={a.id} style={styles.itemRow}>
+              <View style={[styles.typeDot, { backgroundColor: palette.chart[assetTypeIndex(a.type)] }]} />
+              <View style={{ flex: 1 }}>
+                <View style={styles.nameRow}>
+                  <Text style={{ fontSize: 14, fontWeight: '600', color: palette.text }}>{a.name}</Text>
                 </View>
-              ))}
+                <Text style={{ fontSize: 11, color: palette.textMuted }}>{a.type} · {a.liquid ? 'Liquid' : 'Illiquid'}</Text>
+              </View>
+              <Text style={{ fontSize: 14, fontWeight: '700', color: palette.text }}>{formatMoney(a.value, currency, { compact: true })}</Text>
+              <Pressable onPress={() => setEditingAsset(a)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Edit">
+                <Pencil size={16} color={palette.primary} />
+              </Pressable>
+              <Pressable onPress={() => setPendingDelete(a)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Delete">
+                <Trash2 size={16} color={palette.danger} />
+              </Pressable>
             </View>
           ))
         )}
@@ -262,11 +250,13 @@ function InvestmentsTab() {
   const { addInvestment, addInvestmentWithContribution, updateInvestment, updateContribution, deleteInvestment, setInvestmentStatus } = useStore();
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editingInvestment, setEditingInvestment] = useState<Investment | null>(null);
+  const [managingContribs, setManagingContribs] = useState<Investment | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Investment | null>(null);
-  const [period, setPeriod] = useState<PeriodMode>('monthly');
   const today = todayISO();
-  const total = totalInvestments(data.investments);
-  const contributedTotal = data.investments
+  // Values include contributions made since the value was last entered; editing starts from these live values.
+  const liveInvestments = useMemo(() => withLiveData(data, today).investments, [data, today]);
+  const total = totalInvestments(liveInvestments);
+  const contributedTotal = liveInvestments
     .filter((i) => i.status !== 'closed')
     .reduce((sum, inv) => {
       const c = totalContributed(data.contributions, inv.id, today);
@@ -274,7 +264,7 @@ function InvestmentsTab() {
     }, 0);
   const gain = contributedTotal > 0 ? total - contributedTotal : 0;
 
-  const grouped = useMemo(() => groupByPeriod(data.investments, period), [data.investments, period]);
+  const sortedInvestments = useMemo(() => [...liveInvestments].sort((a, b) => b.purchaseDate.localeCompare(a.purchaseDate)), [liveInvestments]);
 
   return (
     <View style={{ gap: 14 }}>
@@ -286,11 +276,6 @@ function InvestmentsTab() {
         </Text>
       </Card>
 
-      <View style={styles.tabRow}>
-        <Chip label="Monthly" selected={period === 'monthly'} onPress={() => setPeriod('monthly')} />
-        <Chip label="Yearly" selected={period === 'annual'} onPress={() => setPeriod('annual')} />
-      </View>
-
       <Card>
         <SectionTitle title="Holdings" action={
           <Pressable onPress={() => setSheetOpen(true)}>
@@ -300,56 +285,56 @@ function InvestmentsTab() {
         {data.investments.length === 0 ? (
           <EmptyState title="No investments yet" subtitle="Track stocks, mutual funds, FDs, PPF, crypto, and more." />
         ) : (
-          grouped.map((group) => (
-            <View key={group.key}>
-              <Text style={[styles.groupHeader, { color: palette.textMuted }]}>{group.label}</Text>
-              {group.items.map((inv) => {
-                const contributed = totalContributed(data.contributions, inv.id, today);
-                const costBasis = contributed > 0 ? contributed : inv.purchaseValue;
-                const gain = inv.currentValue - costBasis;
-                // CAGR is only meaningful for a single lump-sum; hide it when SIPs or several contributions exist.
-                const contribs = data.contributions.filter((c) => c.holdingId === inv.id);
-                const isLumpSum = contribs.length <= 1 && contribs.every((c) => c.type === 'onetime');
-                const cagrValue = isLumpSum ? cagr(inv.purchaseValue, inv.currentValue, inv.purchaseDate, today) : null;
-                const monthly = monthlyContribution(data.contributions, inv.id);
-                return (
-                  <View key={inv.id} style={styles.itemRow}>
-                    <View style={[styles.typeDot, { backgroundColor: palette.chart[invTypeIndex(inv.type)] }]} />
-                    <View style={{ flex: 1 }}>
-                      <View style={styles.nameRow}>
-                        <Text style={{ fontSize: 14, fontWeight: '600', color: palette.text }}>{inv.name}</Text>
-                        <StatusBadge status={inv.status} />
-                      </View>
-                      <Text style={{ fontSize: 11, color: palette.textMuted }}>
-                        {inv.type}{cagrValue !== null ? ` · CAGR ${formatPercent(cagrValue)}` : ' · CAGR N/A (SIP)'}{monthly > 0 ? ` · ${formatMoney(monthly, currency, { compact: true })}/mo SIP` : ''}
-                      </Text>
-                      <LifecycleActions
-                        status={inv.status}
-                        onPause={() => setInvestmentStatus(inv.id, 'paused')}
-                        onResume={() => setInvestmentStatus(inv.id, 'active')}
-                        onClose={() => setInvestmentStatus(inv.id, 'closed')}
-                        onReopen={() => setInvestmentStatus(inv.id, 'active')}
-                      />
-                    </View>
-                    <View style={{ alignItems: 'flex-end' }}>
-                      <Text style={{ fontSize: 14, fontWeight: '700', color: palette.text }}>{formatMoney(inv.currentValue, currency, { compact: true })}</Text>
-                      <Text style={{ fontSize: 11, color: gain >= 0 ? palette.success : palette.danger }}>
-                        {gain >= 0 ? '+' : '-'}{formatMoney(Math.abs(gain), currency, { compact: true })}
-                      </Text>
-                    </View>
-                    <Pressable onPress={() => setEditingInvestment(inv)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Edit">
-                      <Pencil size={16} color={palette.primary} />
-                    </Pressable>
-                    <Pressable onPress={() => setPendingDelete(inv)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Delete">
-                      <Trash2 size={16} color={palette.danger} />
-                    </Pressable>
+          sortedInvestments.map((inv) => {
+            const contributed = totalContributed(data.contributions, inv.id, today);
+            const costBasis = contributed > 0 ? contributed : inv.purchaseValue;
+            const gain = inv.currentValue - costBasis;
+            // Money-weighted annual return (XIRR) handles SIPs and multiple contributions; for a single lump sum it equals CAGR.
+            const cagrValue = investmentXirr(data.contributions, inv.id, inv.purchaseValue, inv.purchaseDate, inv.currentValue, today);
+            const monthly = monthlyContribution(data.contributions, inv.id);
+            return (
+              <View key={inv.id} style={styles.itemRow}>
+                <View style={[styles.typeDot, { backgroundColor: palette.chart[invTypeIndex(inv.type)] }]} />
+                <View style={{ flex: 1 }}>
+                  <View style={styles.nameRow}>
+                    <Text style={{ fontSize: 14, fontWeight: '600', color: palette.text }}>{inv.name}</Text>
+                    <StatusBadge status={inv.status} />
                   </View>
-                );
-              })}
-            </View>
-          ))
+                  <Text style={{ fontSize: 11, color: palette.textMuted }}>
+                    {inv.type}{cagrValue !== null ? ` · XIRR ${formatPercent(cagrValue)}` : ' · XIRR N/A'}{monthly > 0 ? ` · ${formatMoney(monthly, currency, { compact: true })}/mo SIP` : ''}
+                  </Text>
+                  <LifecycleActions
+                    status={inv.status}
+                    onPause={() => setInvestmentStatus(inv.id, 'paused')}
+                    onResume={() => setInvestmentStatus(inv.id, 'active')}
+                    onClose={() => setInvestmentStatus(inv.id, 'closed')}
+                    onReopen={() => setInvestmentStatus(inv.id, 'active')}
+                  />
+                <Pressable onPress={() => setManagingContribs(inv)} hitSlop={6} accessibilityRole="button">
+                  <Text style={{ fontSize: 11, color: palette.primary, fontWeight: '600', marginTop: 6 }}>SIPs & top-ups</Text>
+                </Pressable>
+                </View>
+                <View style={{ alignItems: 'flex-end' }}>
+                  <Text style={{ fontSize: 14, fontWeight: '700', color: palette.text }}>{formatMoney(inv.currentValue, currency, { compact: true })}</Text>
+                  <Text style={{ fontSize: 11, color: gain >= 0 ? palette.success : palette.danger }}>
+                    {gain >= 0 ? '+' : '-'}{formatMoney(Math.abs(gain), currency, { compact: true })}
+                  </Text>
+                </View>
+                <Pressable onPress={() => setEditingInvestment(inv)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Edit">
+                  <Pencil size={16} color={palette.primary} />
+                </Pressable>
+                <Pressable onPress={() => setPendingDelete(inv)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Delete">
+                  <Trash2 size={16} color={palette.danger} />
+                </Pressable>
+              </View>
+            );
+          })
         )}
       </Card>
+
+      {managingContribs && (
+        <ContributionsSheet investment={managingContribs} onClose={() => setManagingContribs(null)} />
+      )}
 
       {editingInvestment && (
         <InvestmentEditSheet
@@ -538,11 +523,12 @@ function DebtsTab() {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editingDebt, setEditingDebt] = useState<Debt | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Debt | null>(null);
-  const [period, setPeriod] = useState<PeriodMode>('monthly');
-  const total = totalDebt(data.debts);
-  const monthly = monthlyDebtPayments(data.debts);
+  // Balances reflect EMIs paid since each debt's date; editing still uses the stored debt.
+  const liveDebts = useMemo(() => withLiveData(data, todayISO()).debts, [data]);
+  const total = totalDebt(liveDebts);
+  const monthly = monthlyDebtPayments(liveDebts);
 
-  const grouped = useMemo(() => groupByPeriod(data.debts, period), [data.debts, period]);
+  const sortedDebts = useMemo(() => [...liveDebts].sort((a, b) => b.date.localeCompare(a.date)), [liveDebts]);
 
   const setDebtLifecycle = (debt: Debt, status: Debt['status']) => {
     setDebtStatus(debt.id, status);
@@ -556,11 +542,6 @@ function DebtsTab() {
         <Text style={{ fontSize: 12, color: palette.textMuted, marginTop: 4 }}>Monthly payments: {formatMoney(monthly, currency, { compact: true })}</Text>
       </Card>
 
-      <View style={styles.tabRow}>
-        <Chip label="Monthly" selected={period === 'monthly'} onPress={() => setPeriod('monthly')} />
-        <Chip label="Yearly" selected={period === 'annual'} onPress={() => setPeriod('annual')} />
-      </View>
-
       <Card>
         <SectionTitle title="Debts" action={
           <Pressable onPress={() => setSheetOpen(true)}>
@@ -570,47 +551,40 @@ function DebtsTab() {
         {data.debts.length === 0 ? (
           <EmptyState title="No debts tracked" subtitle="Add loans, credit cards, and EMIs to see payoff timelines." />
         ) : (
-          grouped.map((group) => (
-            <View key={group.key}>
-              <Text style={[styles.groupHeader, { color: palette.textMuted }]}>{group.label}</Text>
-              {group.items.map((d) => {
-                const months = d.status === 'closed' ? 0 : debtPayoffMonths(d);
-                return (
-                  <View key={d.id} style={styles.itemRow}>
-                    <View style={[styles.typeDot, { backgroundColor: palette.danger }]} />
-                    <View style={{ flex: 1 }}>
-                      <View style={styles.nameRow}>
-                        <Text style={{ fontSize: 14, fontWeight: '600', color: palette.text }}>{d.name}</Text>
-                        <StatusBadge status={d.status} />
-                      </View>
-                      <Text style={{ fontSize: 11, color: palette.textMuted }}>{d.type} · {d.interestRate}% · {d.status === 'closed' ? 'paid off' : months === Infinity ? 'EMI below interest' : `${months} mo left`}{d.closedDate ? ` · ${d.closedDate}` : ''}</Text>
-                      <LifecycleActions
-                        status={d.status}
-                        onPause={() => setDebtLifecycle(d, 'paused')}
-                        onResume={() => setDebtLifecycle(d, 'active')}
-                        onClose={() => setDebtLifecycle(d, 'closed')}
-                        onReopen={() => setDebtLifecycle(d, 'active')}
-                      />
-                    </View>
-                    <View style={{ alignItems: 'flex-end' }}>
-                      <Text style={{ fontSize: 14, fontWeight: '700', color: palette.text }}>{formatMoney(d.outstanding, currency, { compact: true })}</Text>
-                      <Text style={{ fontSize: 11, color: palette.textMuted }}>EMI {formatMoney(d.emi, currency, { compact: true })}</Text>
-                    </View>
-                    <Pressable onPress={() => setEditingDebt(d)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Edit">
-                      <Pencil size={16} color={palette.primary} />
-                    </Pressable>
-                    <Pressable onPress={() => setPendingDelete(d)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Delete">
-                      <Trash2 size={16} color={palette.danger} />
-                    </Pressable>
+          sortedDebts.map((d) => {
+            const months = d.status === 'closed' ? 0 : debtPayoffMonths(d);
+            return (
+              <View key={d.id} style={styles.itemRow}>
+                <View style={[styles.typeDot, { backgroundColor: palette.danger }]} />
+                <View style={{ flex: 1 }}>
+                  <View style={styles.nameRow}>
+                    <Text style={{ fontSize: 14, fontWeight: '600', color: palette.text }}>{d.name}</Text>
+                    <StatusBadge status={d.status} />
                   </View>
-                );
-              })}
-            </View>
-          ))
+                  <Text style={{ fontSize: 11, color: palette.textMuted }}>{d.type} · {d.interestRate}% · {d.status === 'closed' ? 'paid off' : months === Infinity ? 'EMI below interest' : `${months} mo left`}{d.closedDate ? ` · ${d.closedDate}` : ''}</Text>
+                  <LifecycleActions
+                    status={d.status}
+                    onPause={() => setDebtLifecycle(d, 'paused')}
+                    onResume={() => setDebtLifecycle(d, 'active')}
+                    onClose={() => setDebtLifecycle(d, 'closed')}
+                    onReopen={() => setDebtLifecycle(d, 'active')}
+                  />
+                </View>
+                <View style={{ alignItems: 'flex-end' }}>
+                  <Text style={{ fontSize: 14, fontWeight: '700', color: palette.text }}>{formatMoney(d.outstanding, currency, { compact: true })}</Text>
+                  <Text style={{ fontSize: 11, color: palette.textMuted }}>EMI {formatMoney(d.emi, currency, { compact: true })}</Text>
+                </View>
+                <Pressable onPress={() => setEditingDebt(data.debts.find((x) => x.id === d.id) ?? d)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Edit">
+                  <Pencil size={16} color={palette.primary} />
+                </Pressable>
+                <Pressable onPress={() => setPendingDelete(d)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Delete">
+                  <Trash2 size={16} color={palette.danger} />
+                </Pressable>
+              </View>
+            );
+          })
         )}
       </Card>
-
-      {data.debts.length > 0 && <DebtStrategyCard />}
 
       <DebtSheet
         visible={sheetOpen}
@@ -637,33 +611,6 @@ function DebtsTab() {
         />
       )}
     </View>
-  );
-}
-
-function DebtStrategyCard() {
-  const { data, palette, currency } = useUi();
-  const { snowball, avalanche } = debtStrategies(data.debts);
-  return (
-    <Card>
-      <SectionTitle title="Payoff Strategy" />
-      <Text style={{ fontSize: 12, color: palette.textMuted, marginBottom: 8 }}>
-        Snowball pays smallest balances first for momentum. Avalanche pays highest interest first to save money.
-      </Text>
-      <View style={styles.strategyRow}>
-        <View style={{ flex: 1 }}>
-          <Text style={{ fontSize: 13, fontWeight: '700', color: palette.text }}>Snowball</Text>
-          {snowball.map((d, i) => (
-            <Text key={d.id} style={{ fontSize: 11, color: palette.textMuted }}>{i + 1}. {d.name} ({formatMoney(d.outstanding, currency, { compact: true })})</Text>
-          ))}
-        </View>
-        <View style={{ flex: 1 }}>
-          <Text style={{ fontSize: 13, fontWeight: '700', color: palette.text }}>Avalanche</Text>
-          {avalanche.map((d, i) => (
-            <Text key={d.id} style={{ fontSize: 11, color: palette.textMuted }}>{i + 1}. {d.name} ({d.interestRate}%)</Text>
-          ))}
-        </View>
-      </View>
-    </Card>
   );
 }
 
@@ -714,10 +661,10 @@ function DebtSheet({
         <Input value={outstanding} onChangeText={(t) => setOutstanding(t.replace(/[^0-9.]/g, ''))} keyboardType="numeric" placeholder="0" />
       </Field>
       <View style={styles.twoCol}>
-        <Field label="Interest %">
+        <Field half label="Interest %">
           <Input value={interestRate} onChangeText={(t) => setInterestRate(t.replace(/[^0-9.]/g, ''))} keyboardType="numeric" placeholder="0" />
         </Field>
-        <Field label="Tenure (mo)">
+        <Field half label="Tenure (mo)">
           <Input value={tenureMonths} onChangeText={(t) => setTenureMonths(t.replace(/[^0-9.]/g, ''))} keyboardType="numeric" placeholder="0" />
         </Field>
       </View>
@@ -729,6 +676,136 @@ function DebtSheet({
       </Field>
       {error && <Text style={{ fontSize: 13, color: palette.danger }}>{error}</Text>}
       <Button label={initial ? 'Save' : 'Add Debt'} onPress={submit} style={{ marginTop: 8 }} />
+    </Sheet>
+  );
+}
+
+function ContributionsSheet({ investment, onClose }: { investment: Investment; onClose: () => void }) {
+  const { data, palette, currency } = useUi();
+  const { addContribution, updateContribution, deleteContribution, setContributionStatus, updateInvestment } = useStore();
+  const items = useMemo(
+    () => data.contributions
+      .filter((c) => c.holdingKind === 'investment' && c.holdingId === investment.id)
+      .sort((a, b) => b.startDate.localeCompare(a.startDate)),
+    [data.contributions, investment.id],
+  );
+  const [editing, setEditing] = useState<Contribution | 'new' | null>(null);
+  const [type, setType] = useState<ContributionType>('recurring');
+  const [amount, setAmount] = useState('');
+  const [freq, setFreq] = useState<ContributionFreq>('monthly');
+  const [startDate, setStartDate] = useState(todayISO());
+  const [error, setError] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<Contribution | null>(null);
+
+  const openForm = (c?: Contribution) => {
+    setEditing(c ?? 'new');
+    setType(c?.type ?? 'recurring');
+    setAmount(c ? String(c.amount) : '');
+    setFreq(c?.freq ?? 'monthly');
+    setStartDate(c?.startDate ?? todayISO());
+    setError(null);
+  };
+
+  const submit = () => {
+    const amt = Number(amount);
+    if (!amt || amt <= 0) { setError('Enter an amount greater than zero.'); return; }
+    if (!isValidIsoDate(startDate)) { setError('Use a valid date in YYYY-MM-DD format.'); return; }
+    const fields = { type, amount: amt, freq: type === 'recurring' ? freq : undefined, startDate };
+    if (editing && editing !== 'new') {
+      updateContribution(editing.id, fields);
+      // The earliest entry is the purchase itself, so keep the investment's purchase details in step with it.
+      const earliest = [...items].sort((a, b) => a.startDate.localeCompare(b.startDate))[0];
+      if (earliest?.id === editing.id) updateInvestment(investment.id, { purchaseValue: amt, purchaseDate: startDate });
+    } else {
+      addContribution({ holdingKind: 'investment', holdingId: investment.id, status: 'active', ...fields });
+    }
+    setEditing(null);
+  };
+
+  return (
+    <Sheet visible onClose={onClose} title={`${investment.name} — SIPs & top-ups`}>
+      {items.length === 0 && editing === null && (
+        <Text style={{ fontSize: 12, color: palette.textMuted }}>No contributions recorded yet.</Text>
+      )}
+
+      {editing === null && items.map((c) => (
+        <View key={c.id} style={styles.itemRow}>
+          <View style={{ flex: 1 }}>
+            <View style={styles.nameRow}>
+              <Text style={{ fontSize: 14, fontWeight: '600', color: palette.text }}>
+                {formatMoney(c.amount, currency)}{c.type === 'recurring' ? ` ${c.freq ?? 'monthly'}` : ''}
+              </Text>
+              {c.type === 'recurring' && <StatusBadge status={c.status} />}
+            </View>
+            <Text style={{ fontSize: 11, color: palette.textMuted }}>
+              {c.type === 'recurring' ? `SIP from ${c.startDate}` : `One-time on ${c.startDate}`}
+            </Text>
+            {c.type === 'recurring' && (
+              <LifecycleActions
+                status={c.status}
+                onPause={() => setContributionStatus(c.id, 'paused')}
+                onResume={() => setContributionStatus(c.id, 'active')}
+                onClose={() => setContributionStatus(c.id, 'closed')}
+                onReopen={() => setContributionStatus(c.id, 'active')}
+              />
+            )}
+          </View>
+          <Pressable onPress={() => openForm(c)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Edit">
+            <Pencil size={16} color={palette.primary} />
+          </Pressable>
+          <Pressable onPress={() => setPendingDelete(c)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Delete">
+            <Trash2 size={16} color={palette.danger} />
+          </Pressable>
+        </View>
+      ))}
+
+      {pendingDelete && editing === null && (
+        <View style={{ borderWidth: 1, borderColor: palette.danger + '44', backgroundColor: palette.danger + '11', borderRadius: 12, padding: 12, marginTop: 8 }}>
+          <Text style={{ fontSize: 13, color: palette.danger, fontWeight: '600', marginBottom: 8 }}>
+            Delete this {pendingDelete.type === 'recurring' ? 'SIP' : 'contribution'}?
+          </Text>
+          <View style={{ flexDirection: 'row', gap: 10 }}>
+            <Button label="Cancel" variant="outline" onPress={() => setPendingDelete(null)} style={{ flex: 1 }} />
+            <Button label="Delete" variant="danger" onPress={() => { deleteContribution(pendingDelete.id); setPendingDelete(null); }} style={{ flex: 1 }} />
+          </View>
+        </View>
+      )}
+
+      {editing !== null ? (
+        <View style={{ gap: 12 }}>
+          <Field label="Type">
+            <View style={styles.chipRow}>
+              <Chip label="One-time top-up" selected={type === 'onetime'} onPress={() => setType('onetime')} />
+              <Chip label="Recurring (SIP)" selected={type === 'recurring'} onPress={() => setType('recurring')} />
+            </View>
+          </Field>
+          <Field money label="Amount">
+            <Input value={amount} onChangeText={(t) => setAmount(t.replace(/[^0-9.]/g, ''))} keyboardType="numeric" placeholder="0" />
+          </Field>
+          {type === 'recurring' && (
+            <Field label="Frequency">
+              <View style={styles.chipRow}>
+                {(['weekly', 'monthly', 'quarterly'] as ContributionFreq[]).map((f) => (
+                  <Chip key={f} label={f} selected={freq === f} onPress={() => setFreq(f)} />
+                ))}
+              </View>
+            </Field>
+          )}
+          <Field label={type === 'recurring' ? 'Start Date' : 'Date'}>
+            <Input value={startDate} onChangeText={setStartDate} placeholder="YYYY-MM-DD" />
+          </Field>
+          <Text style={{ fontSize: 11, color: palette.textMuted }}>
+            Payments dated after {investment.valueUpdatedDate ?? 'the last value update'} are added to the current value; earlier ones are assumed to be in it already.
+          </Text>
+          {error && <Text style={{ fontSize: 13, color: palette.danger }}>{error}</Text>}
+          <View style={{ flexDirection: 'row', gap: 10 }}>
+            <Button label="Cancel" variant="outline" onPress={() => setEditing(null)} style={{ flex: 1 }} />
+            <Button label={editing === 'new' ? 'Add' : 'Save'} onPress={submit} style={{ flex: 1 }} />
+          </View>
+        </View>
+      ) : (
+        <Button label="+ Add SIP or top-up" onPress={() => openForm()} style={{ marginTop: 8 }} />
+      )}
     </Sheet>
   );
 }
@@ -808,7 +885,8 @@ function AllocationTab() {
   const [editing, setEditing] = useState(false);
   const [draftEntries, setDraftEntries] = useState<Array<{ id: string; key?: AllocationKey; name: string; value: number }>>([]);
 
-  const actual = useMemo(() => actualAllocation(data.investments, data.assets), [data.investments, data.assets]);
+  const liveData = useMemo(() => withLiveData(data, todayISO()), [data]);
+  const actual = useMemo(() => actualAllocation(liveData.investments, liveData.assets), [liveData]);
   const age = data.settings.age;
   const band = age ? bandForAge(age) : null;
   const bandLabel = age ? bandLabelForAge(age) : null;
@@ -891,6 +969,9 @@ function AllocationTab() {
             <Text style={{ fontSize: 12, color: palette.textMuted, marginTop: 6 }}>Target {bandLabel ? `(${bandLabel})` : ''}</Text>
           </View>
         </View>
+        {age && data.settings.allocationTargets?.custom && !editing && (
+          <Button label={`Reset to age-based target (${bandLabel})`} variant="outline" onPress={() => setAllocationTargets(bandForAge(age))} style={{ marginTop: 12 }} />
+        )}
       </Card>
 
       {editing && (
@@ -939,7 +1020,7 @@ function AllocationTab() {
             </Text>
           )}
           {drift.map((d) => {
-            const investTotal = totalInvestments(data.investments) + data.assets.filter((a) => a.type === 'gold').reduce((s, a) => s + a.value, 0);
+            const investTotal = totalInvestments(liveData.investments) + liveData.assets.filter((a) => a.type === 'gold').reduce((s, a) => s + a.value, 0);
             const shiftAmt = d.drift * investTotal;
             return (
               <View key={d.type} style={styles.driftRow}>
@@ -985,7 +1066,6 @@ const styles = StyleSheet.create({
   screenTitle: { fontSize: 24, fontWeight: '800' },
   content: { padding: 16, gap: 14, paddingBottom: 40 },
   tabRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  groupHeader: { fontSize: 12, fontWeight: '700', marginTop: 12, marginBottom: 4, textTransform: 'uppercase' },
   totalCard: { padding: 20 },
   totalLabel: { fontSize: 13, fontWeight: '600' },
   totalValue: { fontSize: 30, fontWeight: '800', marginTop: 4 },
@@ -998,7 +1078,6 @@ const styles = StyleSheet.create({
   twoCol: { flexDirection: 'row', gap: 12 },
   donutRow: { flexDirection: 'row', justifyContent: 'space-around', gap: 12 },
   driftRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, gap: 8 },
-  strategyRow: { flexDirection: 'row', gap: 12 },
   stepIndicator: { flexDirection: 'row', justifyContent: 'space-between', paddingBottom: 12, marginBottom: 4, borderBottomWidth: StyleSheet.hairlineWidth },
   stepDotWrap: { flexDirection: 'row', alignItems: 'center' },
   stepDot: { width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },

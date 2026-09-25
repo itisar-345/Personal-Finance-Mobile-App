@@ -8,7 +8,7 @@ import { ConfirmDeleteSheet } from '@/components/ConfirmDeleteSheet';
 import { useStore } from '@/lib/store';
 import { computeTotals, monthKey, yearKey, inPeriod, groupByPeriod, recurringTransactionsThrough } from '@/lib/calc';
 import { formatMoney, isValidIsoDate, todayISO, monthLabel } from '@/lib/format';
-import { Plus, Repeat, Trash2, X, Pencil } from 'lucide-react-native';
+import { Plus, Repeat, Trash2, ChevronLeft, ChevronRight, Search } from 'lucide-react-native';
 import type { Transaction, TxnType, RecurringType, Category } from '@/lib/types';
 
 type Filter = TxnType | 'all';
@@ -21,25 +21,46 @@ export default function TransactionsScreen() {
   const [editTxn, setEditTxn] = useState<Transaction | null>(null);
   const [filter, setFilter] = useState<Filter>('all');
   const [period, setPeriod] = useState<Period>('monthly');
+  const [refDate, setRefDate] = useState(todayISO());
+  const [query, setQuery] = useState('');
   const [pendingDelete, setPendingDelete] = useState<Transaction | null>(null);
   const today = todayISO();
   const transactions = useMemo(() => recurringTransactionsThrough(data.transactions, today), [data.transactions, today]);
 
-  const totals = useMemo(() => computeTotals(transactions, data.categories, period, today), [transactions, data.categories, period, today]);
+  const totals = useMemo(() => computeTotals(transactions, data.categories, period, refDate), [transactions, data.categories, period, refDate]);
 
   const periodTxns = useMemo(
-    () => transactions.filter((t) => inPeriod(t.date, period, today)).sort((a, b) => b.date.localeCompare(a.date)),
-    [transactions, today, period],
+    () => transactions.filter((t) => inPeriod(t.date, period, refDate)).sort((a, b) => b.date.localeCompare(a.date)),
+    [transactions, refDate, period],
   );
-  const shown = filter === 'all' ? periodTxns : periodTxns.filter((t) => t.type === filter);
+  const catMap = useMemo(() => new Map(data.categories.map((c) => [c.id, c])), [data.categories]);
+  const needle = query.trim().toLowerCase();
+  const shown = useMemo(
+    () => periodTxns.filter((t) => {
+      if (filter !== 'all' && t.type !== filter) return false;
+      if (!needle) return true;
+      return (t.note || '').toLowerCase().includes(needle) || (catMap.get(t.categoryId)?.name || '').toLowerCase().includes(needle);
+    }),
+    [periodTxns, filter, needle, catMap],
+  );
 
-  const grouped = useMemo(() => groupByPeriod(shown, period), [shown, period]);
+  // A month view is one flat list; a year view is broken into months.
+  const grouped = useMemo(() => groupByPeriod(shown, 'monthly'), [shown]);
+
+  // Step the viewed month/year backwards or forwards, never past the current one.
+  const atCurrent = period === 'monthly' ? monthKey(refDate) >= monthKey(today) : yearKey(refDate) >= yearKey(today);
+  const stepPeriod = (dir: -1 | 1) => {
+    if (dir === 1 && atCurrent) return;
+    const [y, m] = refDate.split('-').map(Number);
+    const next = period === 'monthly' ? new Date(y, m - 1 + dir, 1) : new Date(y + dir, 0, 1);
+    setRefDate(todayISO(next));
+  };
+  const periodLabel = period === 'monthly' ? monthLabel(monthKey(refDate)) : yearKey(refDate);
 
   const recurring = useMemo(
     () => data.transactions.filter((t) => t.recurring !== 'none' && (filter === 'all' || t.type === filter)),
     [data.transactions, filter],
   );
-  const catMap = useMemo(() => new Map(data.categories.map((c) => [c.id, c])), [data.categories]);
 
   const breakdown = useMemo(() => {
     const txns = filter === 'all' ? periodTxns : periodTxns.filter((t) => t.type === filter);
@@ -77,13 +98,13 @@ export default function TransactionsScreen() {
         <View style={styles.summaryRow}>
           {showIncomeCard && (
             <Card style={styles.summaryCard}>
-              <Text style={[styles.summaryLabel, { color: palette.textMuted }]}>Income ({period === 'monthly' ? 'mo' : 'yr'})</Text>
+              <Text style={[styles.summaryLabel, { color: palette.textMuted }]}>Income</Text>
               <Text style={[styles.summaryValue, { color: palette.success }]}>{formatMoney(totals.income, currency, { compact: true })}</Text>
             </Card>
           )}
           {showExpenseCard && (
             <Card style={styles.summaryCard}>
-              <Text style={[styles.summaryLabel, { color: palette.textMuted }]}>Expenses ({period === 'monthly' ? 'mo' : 'yr'})</Text>
+              <Text style={[styles.summaryLabel, { color: palette.textMuted }]}>Expenses</Text>
               <Text style={[styles.summaryValue, { color: palette.danger }]}>{formatMoney(totals.expenses, currency, { compact: true })}</Text>
             </Card>
           )}
@@ -108,16 +129,39 @@ export default function TransactionsScreen() {
           <Chip label="Expense" selected={filter === 'expense'} onPress={() => setFilter('expense')} />
         </View>
 
-        {/* Period toggle */}
-        <View style={styles.filterRow}>
-          <Chip label="Monthly" selected={period === 'monthly'} onPress={() => setPeriod('monthly')} />
-          <Chip label="Yearly" selected={period === 'annual'} onPress={() => setPeriod('annual')} />
+        {/* Period + navigation */}
+        <View style={styles.periodRow}>
+          <View style={styles.filterRow}>
+            <Chip label="Month" selected={period === 'monthly'} onPress={() => setPeriod('monthly')} />
+            <Chip label="Year" selected={period === 'annual'} onPress={() => setPeriod('annual')} />
+          </View>
+          <View style={styles.stepper}>
+            <Pressable onPress={() => stepPeriod(-1)} hitSlop={10} accessibilityRole="button" accessibilityLabel="Previous period">
+              <ChevronLeft size={20} color={palette.text} />
+            </Pressable>
+            <Text style={[styles.stepLabel, { color: palette.text }]}>{periodLabel}</Text>
+            <Pressable onPress={() => stepPeriod(1)} disabled={atCurrent} hitSlop={10} accessibilityRole="button" accessibilityLabel="Next period">
+              <ChevronRight size={20} color={atCurrent ? palette.border : palette.text} />
+            </Pressable>
+          </View>
+        </View>
+
+        <View style={[styles.searchBox, { backgroundColor: palette.surfaceAlt, borderColor: palette.border }]}>
+          <Search size={16} color={palette.textMuted} />
+          <Input
+            value={query}
+            onChangeText={setQuery}
+            placeholder="Search notes or categories"
+            style={styles.searchInput}
+            autoCorrect={false}
+            returnKeyType="search"
+          />
         </View>
 
         {/* Donut breakdown */}
-        {breakdown.length > 0 && (
+        {filter !== 'all' && breakdown.length > 0 && (
           <Card>
-            <SectionTitle title={filter === 'all' ? 'Income vs Expense' : filter === 'income' ? 'Income Breakdown' : 'Expense Breakdown'} />
+            <SectionTitle title={filter === 'income' ? 'Income Breakdown' : 'Expense Breakdown'} />
             <DonutChart
               data={breakdown.map((b, i) => ({ label: b.name, value: b.amount, color: b.color || palette.chart[i % palette.chart.length] }))}
             />
@@ -132,6 +176,44 @@ export default function TransactionsScreen() {
             </View>
           </Card>
         )}
+
+        {/* This period's transactions */}
+        <Card>
+          <SectionTitle title={periodLabel} />
+          {shown.length === 0 ? (
+            <EmptyState
+              title={needle ? 'No matches' : 'No transactions'}
+              subtitle={needle ? 'Try a different search.' : refDate.slice(0, 7) === today.slice(0, 7) || period === 'annual' ? 'Tap the + button to add income or expenses.' : 'Nothing recorded in this period.'}
+            />
+          ) : (
+            <View style={styles.txnList}>
+              {grouped.map((group) => (
+                <View key={group.key}>
+                  {period === 'annual' && <Text style={[styles.groupHeader, { color: palette.textMuted }]}>{group.label}</Text>}
+                  {group.items.map((t) => {
+                    const cat = catMap.get(t.categoryId);
+                    return (
+                      <Pressable key={t.id} style={styles.txnRow} onPress={() => setEditTxn(t.recurringRef ? data.transactions.find((source) => source.id === t.recurringRef) || t : t)}>
+                        <View style={[styles.txnIcon, { backgroundColor: (t.type === 'income' ? palette.success : palette.danger) + '22' }]}>
+                          <Text style={{ fontSize: 16, fontWeight: '700', color: t.type === 'income' ? palette.success : palette.danger }}>
+                            {t.type === 'income' ? '↑' : '↓'}
+                          </Text>
+                        </View>
+                        <View style={styles.txnInfo}>
+                          <Text style={[styles.txnCat, { color: palette.text }]}>{cat?.name || 'Unknown'}</Text>
+                          <Text style={[styles.txnNote, { color: palette.textMuted }]}>{t.note || t.date}{t.recurring !== 'none' ? ' · recurring' : ''}</Text>
+                        </View>
+                        <Text style={[styles.txnAmt, { color: t.type === 'income' ? palette.success : palette.text }]}>
+                          {t.type === 'income' ? '+' : '-'}{formatMoney(t.amount, currency, { compact: true })}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              ))}
+            </View>
+          )}
+        </Card>
 
         {/* Recurring transactions */}
         {recurring.length > 0 && (
@@ -163,47 +245,6 @@ export default function TransactionsScreen() {
             ))}
           </Card>
         )}
-
-        {/* This period's transactions */}
-        <Card>
-          <SectionTitle title={period === 'monthly' ? `This Month (${monthLabel(monthKey(today)).split(' ')[0]})` : `This Year (${yearKey(today)})`} />
-          {shown.length === 0 ? (
-            <EmptyState title="No transactions yet" subtitle="Tap the + button to add income or expenses." />
-          ) : (
-            <View style={styles.txnList}>
-              {grouped.map((group) => (
-                <View key={group.key}>
-                  <Text style={[styles.groupHeader, { color: palette.textMuted }]}>{group.label}</Text>
-                  {group.items.map((t) => {
-                    const cat = catMap.get(t.categoryId);
-                    return (
-                      <Pressable key={t.id} style={styles.txnRow} onPress={() => setEditTxn(t.recurringRef ? data.transactions.find((source) => source.id === t.recurringRef) || t : t)}>
-                        <View style={[styles.txnIcon, { backgroundColor: (t.type === 'income' ? palette.success : palette.danger) + '22' }]}>
-                          <Text style={{ fontSize: 16, fontWeight: '700', color: t.type === 'income' ? palette.success : palette.danger }}>
-                            {t.type === 'income' ? '↑' : '↓'}
-                          </Text>
-                        </View>
-                        <View style={styles.txnInfo}>
-                          <Text style={[styles.txnCat, { color: palette.text }]}>{cat?.name || 'Unknown'}</Text>
-                          <Text style={[styles.txnNote, { color: palette.textMuted }]}>{t.note || t.date}{t.recurring !== 'none' ? ' · recurring' : ''}</Text>
-                        </View>
-                        <Text style={[styles.txnAmt, { color: t.type === 'income' ? palette.success : palette.text }]}>
-                          {t.type === 'income' ? '+' : '-'}{formatMoney(t.amount, currency, { compact: true })}
-                        </Text>
-                        <Pressable onPress={(event) => { event.stopPropagation(); setEditTxn(t.recurringRef ? data.transactions.find((source) => source.id === t.recurringRef) || t : t); }} hitSlop={8} accessibilityRole="button" accessibilityLabel="Edit">
-                          <Pencil size={15} color={palette.textMuted} />
-                        </Pressable>
-                        <Pressable onPress={(event) => { event.stopPropagation(); setPendingDelete(data.transactions.find((source) => source.id === (t.recurringRef || t.id)) || t); }} hitSlop={8} accessibilityRole="button" accessibilityLabel="Delete">
-                          <X size={16} color={palette.textMuted} />
-                        </Pressable>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-              ))}
-            </View>
-          )}
-        </Card>
       </ScrollView>
 
       <TransactionSheet visible={sheetOpen} onClose={() => setSheetOpen(false)} onAdd={addTransaction} categories={data.categories} />
@@ -396,6 +437,11 @@ const styles = StyleSheet.create({
   summaryLabel: { fontSize: 11, fontWeight: '600' },
   summaryValue: { fontSize: 16, fontWeight: '700' },
   filterRow: { flexDirection: 'row', gap: 8 },
+  periodRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  stepper: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  stepLabel: { fontSize: 14, fontWeight: '700', minWidth: 76, textAlign: 'center' },
+  searchBox: { flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderRadius: 12, paddingLeft: 12 },
+  searchInput: { flex: 1, borderWidth: 0, backgroundColor: 'transparent' },
   bdList: { marginTop: 12, gap: 8 },
   bdRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   bdDot: { width: 8, height: 8, borderRadius: 4 },

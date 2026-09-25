@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import { readData, writeData } from './storage';
 import type {
   AppData,
@@ -16,7 +16,7 @@ import type {
   SkippedRange,
 } from './types';
 import { DEFAULT_DATA, genId } from './defaults';
-import { ALLOCATION_KEYS, bandForAge } from './calc';
+import { ALLOCATION_KEYS, bandForAge, assetsAfterPayments } from './calc';
 import { hashPin } from './crypto';
 import { isValidIsoDate, todayISO } from './format';
 
@@ -30,7 +30,8 @@ interface StoreContextValue {
   // categories
   addCategory: (c: Omit<Category, 'id'>) => void;
   updateCategory: (id: string, c: Partial<Category>) => void;
-  deleteCategory: (id: string) => void;
+  /** Returns false (and changes nothing) when the category is the last of its type but still in use. */
+  deleteCategory: (id: string) => boolean;
   // assets
   addAsset: (a: Omit<Asset, 'id'>) => string;
   updateAsset: (id: string, a: Partial<Asset>) => void;
@@ -93,6 +94,28 @@ function applyStatus<T extends Lifecycle>(item: T, status: ItemStatus, iso: stri
     closedDate: status === 'closed' ? (item.status === 'closed' && item.closedDate ? item.closedDate : iso) : undefined,
     skipped,
   };
+}
+
+/**
+ * With payments linked to cash, stored liquid balances are a baseline as of `cashLinkStart`. Before that baseline
+ * is disturbed (an asset edited or removed) fold the payments made so far into the stored balances and restart it today.
+ */
+function commitLiveCash(data: AppData): AppData {
+  const { settings } = data;
+  if (!settings.linkPaymentsToCash || !settings.cashLinkStart) return data;
+  const today = todayISO();
+  return {
+    ...data,
+    assets: assetsAfterPayments(data.assets, data.debts, data.investments, data.contributions, settings.cashLinkStart, today),
+    settings: { ...settings, cashLinkStart: today },
+  };
+}
+
+/** Drop a deleted holding from every goal's links; a goal left with no links reverts to its manual amounts. */
+function unlinkFromGoals(goals: Goal[], holdingId: string): Goal[] {
+  return goals.map((g) => g.linkedIds?.includes(holdingId)
+    ? { ...g, linkedIds: g.linkedIds.filter((x) => x !== holdingId) }
+    : g);
 }
 
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
@@ -183,6 +206,8 @@ function normalizeData(input?: Partial<AppData> | null): AppData {
           currentValue: i.currentValue,
           purchaseDate: dateOr(i.purchaseDate, date),
           status: oneOf(i.status, STATUSES, 'active'),
+          // Older data has no stamp; treat the stored value as current as of first load.
+          valueUpdatedDate: dateOr(i.valueUpdatedDate, date),
         } as Investment
         : null),
     debts: cleanList<Debt>(input?.debts, (d) =>
@@ -211,6 +236,7 @@ function normalizeData(input?: Partial<AppData> | null): AppData {
           currentAmount: g.currentAmount,
           targetDate: dateOr(g.targetDate, date),
           monthlyContribution: isNum(g.monthlyContribution) ? g.monthlyContribution : 0,
+          linkedIds: Array.isArray(g.linkedIds) ? g.linkedIds.filter(isStr) : undefined,
         } as Goal
         : null),
     contributions: cleanList<Contribution>(input?.contributions, (c) =>
@@ -238,6 +264,8 @@ function normalizeData(input?: Partial<AppData> | null): AppData {
       allocationTargets: isObj(settings.allocationTargets) && ALLOCATION_KEYS.every((k) => isNum((settings.allocationTargets as any)[k]))
         ? settings.allocationTargets
         : null,
+      linkPaymentsToCash: settings.linkPaymentsToCash === true,
+      cashLinkStart: typeof settings.cashLinkStart === 'string' && isValidIsoDate(settings.cashLinkStart) ? settings.cashLinkStart : null,
       pinFailedAttempts: isNum(settings.pinFailedAttempts) ? settings.pinFailedAttempts : 0,
       pinLockedUntil: isNum(settings.pinLockedUntil) ? settings.pinLockedUntil : null,
     },
@@ -247,6 +275,8 @@ function normalizeData(input?: Partial<AppData> | null): AppData {
 export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [data, setData] = useState<AppData>(DEFAULT_DATA);
   const [ready, setReady] = useState(false);
+  const dataRef = useRef(data);
+  dataRef.current = data;
 
   useEffect(() => {
     (async () => {
@@ -307,9 +337,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const deleteCategory = useCallback((id: string) => {
+  const deleteCategory = useCallback((id: string): boolean => {
+    const current = dataRef.current;
+    const category = current.categories.find((x) => x.id === id);
+    const hasFallback = current.categories.some((x) => x.id !== id && x.type === category?.type);
+    if (!hasFallback && current.transactions.some((t) => t.categoryId === id)) return false;
     setData((prev) => {
-      const category = prev.categories.find((x) => x.id === id);
       const fallback = prev.categories.find((x) => x.id !== id && x.type === category?.type);
       const next = {
         ...prev,
@@ -321,6 +354,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       save(next);
       return next;
     });
+    return true;
   }, []);
 
   const addAsset = useCallback((a: Omit<Asset, 'id'>): string => {
@@ -335,7 +369,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const updateAsset = useCallback((id: string, a: Partial<Asset>) => {
     setData((prev) => {
-      const next = { ...prev, assets: prev.assets.map((x) => (x.id === id ? { ...x, ...a } : x)) };
+      const base = commitLiveCash(prev);
+      const next = { ...base, assets: base.assets.map((x) => (x.id === id ? { ...x, ...a } : x)) };
       save(next);
       return next;
     });
@@ -343,10 +378,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const deleteAsset = useCallback((id: string) => {
     setData((prev) => {
+      const base = commitLiveCash(prev);
       const next = {
-        ...prev,
-        assets: prev.assets.filter((x) => x.id !== id),
-        contributions: prev.contributions.filter((x) => x.holdingId !== id),
+        ...base,
+        assets: base.assets.filter((x) => x.id !== id),
+        contributions: base.contributions.filter((x) => x.holdingId !== id),
+        goals: unlinkFromGoals(base.goals, id),
       };
       save(next);
       return next;
@@ -355,7 +392,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const addInvestment = useCallback((i: Omit<Investment, 'id'>) => {
     setData((prev) => {
-      const next = { ...prev, investments: [...prev.investments, { ...i, id: genId('inv'), status: i.status || 'active' }] };
+      const next = { ...prev, investments: [...prev.investments, { ...i, id: genId('inv'), status: i.status || 'active', valueUpdatedDate: todayISO() }] };
       save(next);
       return next;
     });
@@ -366,7 +403,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const invId = genId('inv');
       const next = {
         ...prev,
-        investments: [...prev.investments, { ...i, id: invId, status: i.status || 'active' }],
+        investments: [...prev.investments, { ...i, id: invId, status: i.status || 'active', valueUpdatedDate: todayISO() }],
         contributions: [...prev.contributions, { ...c, id: genId('cnb'), holdingId: invId, status: c.status || 'active' }],
       };
       save(next);
@@ -383,7 +420,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           const purchaseValue = i.purchaseValue ?? x.purchaseValue;
           const currentValue = i.currentValue ?? x.currentValue;
           if (purchaseValue <= 0 || currentValue <= 0) return x;
-          return { ...x, ...i, purchaseValue, currentValue };
+          // Entering a new value resets the baseline; contributions after it are added on top for display.
+          const valueUpdatedDate = currentValue !== x.currentValue ? todayISO() : x.valueUpdatedDate;
+          return { ...x, ...i, purchaseValue, currentValue, valueUpdatedDate };
         }),
       };
       save(next);
@@ -397,6 +436,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         ...prev,
         investments: prev.investments.filter((x) => x.id !== id),
         contributions: prev.contributions.filter((x) => x.holdingId !== id),
+        goals: unlinkFromGoals(prev.goals, id),
       };
       save(next);
       return next;
@@ -572,8 +612,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       patch.pinLockedUntil = null;
     }
     setData((prev) => {
-      if (s.age !== undefined && s.age !== null && !prev.settings.allocationTargets?.custom) {
-        patch.allocationTargets = bandForAge(s.age);
+      if (s.age !== undefined && !prev.settings.allocationTargets?.custom) {
+        patch.allocationTargets = s.age === null ? null : bandForAge(s.age);
+      }
+      if (s.linkPaymentsToCash !== undefined && s.linkPaymentsToCash !== prev.settings.linkPaymentsToCash) {
+        patch.cashLinkStart = s.linkPaymentsToCash ? todayISO() : null;
       }
       const next = { ...prev, settings: { ...prev.settings, ...patch } };
       save(next);
@@ -591,7 +634,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const importData = useCallback((d: AppData) => {
     const imported = normalizeData(d);
-    persist({ ...imported, settings: { ...imported.settings, pin: null, pinFailedAttempts: 0, pinLockedUntil: null } });
+    persist({ ...imported, settings: { ...imported.settings, pin: null, pinFailedAttempts: 0, pinLockedUntil: null, onboarded: true } });
   }, [persist]);
 
   const resetData = useCallback(() => {

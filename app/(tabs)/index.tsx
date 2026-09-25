@@ -1,7 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Card, SectionTitle, useUi, Chip, RiskBadge, EmptyState } from '@/components/ui';
+import { useRouter } from 'expo-router';
+import { Card, SectionTitle, useUi, Chip, RiskBadge, EmptyState, Button } from '@/components/ui';
 import { BarChart, DonutChart, Gauge } from '@/components/charts';
 import {
   computeTotals,
@@ -15,19 +16,21 @@ import {
   bandLabelForAge,
   allocationDrift,
   ALLOCATION_LABELS,
-  lifestyleInflation,
   inPeriod,
   recurringTransactionsThrough,
+  withLiveData,
 } from '@/lib/calc';
 import { formatMoney, formatPercent, todayISO, monthLabel, isBackupDue } from '@/lib/format';
 import { TrendingUp, Shield } from 'lucide-react-native';
 
 export default function DashboardScreen() {
   const { data, palette, currency } = useUi();
+  const router = useRouter();
   const [period, setPeriod] = useState<'monthly' | 'annual'>('monthly');
   const today = todayISO();
   const transactions = useMemo(() => recurringTransactionsThrough(data.transactions, today), [data.transactions, today]);
-  const recurringData = useMemo(() => ({ ...data, transactions }), [data, transactions]);
+  // Recurring transactions and EMI-reduced debt balances are derived, never stored.
+  const recurringData = useMemo(() => withLiveData({ ...data, transactions }, today), [data, transactions, today]);
 
   const ratios = useMemo(() => computeRatios(recurringData, today), [recurringData, today]);
   const totals = useMemo(() => computeTotals(transactions, data.categories, period, today), [transactions, data.categories, period, today]);
@@ -48,15 +51,14 @@ export default function DashboardScreen() {
   }, [transactions]);
 
   const nw = ratios.netWorth;
-  const assets = totalAssets(data.assets);
-  const invest = totalInvestments(data.investments);
-  const debt = totalDebt(data.debts);
+  const assets = totalAssets(recurringData.assets);
+  const invest = totalInvestments(recurringData.investments);
+  const debt = totalDebt(recurringData.debts);
 
-  const actual = useMemo(() => actualAllocation(data.investments, data.assets), [data.investments, data.assets]);
+  const actual = useMemo(() => actualAllocation(recurringData.investments, recurringData.assets), [recurringData.investments, recurringData.assets]);
   const bandLabel = data.settings.age ? bandLabelForAge(data.settings.age) : null;
   const targetAlloc = data.settings.allocationTargets || (data.settings.age ? bandForAge(data.settings.age) : null);
   const drift = targetAlloc ? allocationDrift(actual, targetAlloc) : [];
-  const lifeInfl = useMemo(() => lifestyleInflation(transactions, data.categories), [transactions, data.categories]);
 
   const catMap = useMemo(() => new Map(data.categories.map((c) => [c.id, c])), [data.categories]);
 
@@ -80,21 +82,18 @@ export default function DashboardScreen() {
 
   const assetTypeBreakdown = useMemo(() => {
     const map: Record<string, number> = {};
-    data.assets.forEach((a) => { map[a.type] = (map[a.type] || 0) + a.value; });
+    recurringData.assets.forEach((a) => { map[a.type] = (map[a.type] || 0) + a.value; });
     return Object.entries(map).map(([type, value]) => ({ type, value })).sort((a, b) => b.value - a.value);
-  }, [data.assets]);
+  }, [recurringData.assets]);
 
   const debtBreakdown = useMemo(() => {
     const map: Record<string, number> = {};
-    data.debts.filter((d) => d.status !== 'closed').forEach((d) => { map[d.type] = (map[d.type] || 0) + d.outstanding; });
+    recurringData.debts.filter((d) => d.status !== 'closed').forEach((d) => { map[d.type] = (map[d.type] || 0) + d.outstanding; });
     return Object.entries(map).map(([type, value]) => ({ type, value })).sort((a, b) => b.value - a.value);
-  }, [data.debts]);
+  }, [recurringData.debts]);
 
   const hasData = data.transactions.length > 0 || assets > 0 || invest > 0 || debt > 0;
   const periodLabel = period === 'monthly' ? 'this month' : 'this year';
-  const periodSavingsCoverage = totals.expenses > 0
-    ? totals.savings / totals.expenses
-    : (totals.savings > 0 ? Infinity : 0);
 
   if (!hasData) {
     return (
@@ -103,6 +102,8 @@ export default function DashboardScreen() {
           <Text style={[styles.hello, { color: palette.textMuted }]}>Your finances at a glance</Text>
           <Card style={styles.emptyDashboardCard}>
             <EmptyState title="Start building your dashboard" subtitle="Add income or expenses in Transactions, then add assets, investments, or debts to see your financial picture here." />
+            <Button label="Add your first transaction" onPress={() => router.push('/transactions')} style={{ marginTop: 12 }} />
+            <Button label="Add assets or debts" variant="outline" onPress={() => router.push('/assets')} style={{ marginTop: 8 }} />
           </Card>
         </ScrollView>
       </SafeAreaView>
@@ -137,7 +138,7 @@ export default function DashboardScreen() {
           <View style={styles.netBreakdown}>
             <BreakdownItem label="Assets" value={formatMoney(assets, currency, { compact: true })} color={palette.success} />
             <BreakdownItem label="Investments" value={formatMoney(invest, currency, { compact: true })} color={palette.accent} />
-            <BreakdownItem label="Debt" value={`-${formatMoney(debt, currency, { compact: true })}`} color={palette.danger} />
+            <BreakdownItem label="Debt" value={`${debt > 0 ? '-' : ''}${formatMoney(debt, currency, { compact: true })}`} color={palette.danger} />
           </View>
         </Card>
 
@@ -209,20 +210,11 @@ export default function DashboardScreen() {
               note={!isFinite(ratios.debtToAsset) ? 'debt with no assets' : undefined}
             />
             <ScoreRow label="Liquidity" value={formatPercent(ratios.liquidityRatio)} zone={ratios.liquidityRatio >= 0.15 ? 'green' : ratios.liquidityRatio >= 0.05 ? 'yellow' : 'red'} />
-            <ScoreRow label={`Savings Coverage (${period === 'monthly' ? 'month' : 'year'})`} value={!isFinite(periodSavingsCoverage) ? '∞x' : `${periodSavingsCoverage.toFixed(2)}x`} zone={periodSavingsCoverage >= 0.2 ? 'green' : periodSavingsCoverage >= 0.1 ? 'yellow' : 'red'} />
-            {lifeInfl && (
-              <ScoreRow
-                label="Lifestyle Inflation"
-                value={formatPercent(lifeInfl.value)}
-                zone={lifeInfl.value < 0.5 ? 'green' : lifeInfl.value < 1 ? 'yellow' : 'red'}
-                note={lifeInfl.noIncomeGrowth ? 'vs income baseline (no growth)' : 'lower better'}
-              />
-            )}
           </View>
         </Card>
 
         {/* Asset allocation */}
-        {invest > 0 || data.assets.some((asset) => asset.type === 'gold') ? (
+        {invest > 0 || recurringData.assets.some((asset) => asset.type === 'gold') ? (
           <Card>
             <SectionTitle title="Asset Allocation" action={bandLabel ? <Text style={[styles.bandTag, { color: palette.textMuted }]}>Target: {bandLabel}</Text> : undefined} />
             <DonutChart

@@ -17,6 +17,9 @@ import {
   debtStrategyPlan,
   avgMonthlyExpenses,
   recurringTransactionsThrough,
+  withLiveData,
+  goalCurrentAmount,
+  goalMonthlyContribution,
 } from '@/lib/calc';
 import { formatMoney, formatPercent, formatMonths, isValidIsoDate, todayISO } from '@/lib/format';
 import { Trash2, Pencil } from 'lucide-react-native';
@@ -54,6 +57,7 @@ function GoalsTab() {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editingGoal, setEditingGoal] = useState<Goal | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Goal | null>(null);
+  const liveData = useMemo(() => withLiveData(data, todayISO()), [data]);
 
   return (
     <View style={{ gap: 14 }}>
@@ -67,21 +71,24 @@ function GoalsTab() {
           <EmptyState title="No goals yet" subtitle="Set goals like retirement, a house, or an emergency fund to track your progress." />
         ) : (
           data.goals.map((g) => {
-            const progress = goalProgress(g.currentAmount, g.targetAmount);
+            // Linked goals track their holdings' live values and SIPs; unlinked goals use the entered figures.
+            const saved = goalCurrentAmount(g, liveData);
+            const monthlyPlan = goalMonthlyContribution(g, data.contributions);
+            const progress = goalProgress(saved, g.targetAmount);
             const months = monthsUntil(g.targetDate);
             const reached = progress >= 1;
             const isOverdue = !reached && g.targetDate < todayISO();
             // A goal due later this month still needs at least one month of funding.
             const required = (!reached && !isOverdue)
-              ? requiredMonthlyForGoal(g.targetAmount, g.currentAmount, Math.max(1, months), data.settings.expectedReturn || 10)
+              ? requiredMonthlyForGoal(g.targetAmount, saved, Math.max(1, months), data.settings.expectedReturn || 10)
               : null;
-            const monthlyGap = required === null ? 0 : Math.max(0, required - g.monthlyContribution);
+            const monthlyGap = required === null ? 0 : Math.max(0, required - monthlyPlan);
             return (
               <View key={g.id} style={[styles.goalCard, { borderBottomColor: palette.border }]}>
                 <View style={styles.goalHeader}>
                   <View style={{ flex: 1 }}>
                     <Text style={{ fontSize: 15, fontWeight: '700', color: palette.text }}>{g.name}</Text>
-                    <Text style={{ fontSize: 11, color: palette.textMuted }}>{g.kind} · {months} mo left</Text>
+                    <Text style={{ fontSize: 11, color: palette.textMuted }}>{g.kind} · {months} mo left{g.linkedIds?.length ? ` · linked to ${g.linkedIds.length} holding${g.linkedIds.length === 1 ? '' : 's'}` : ''}</Text>
                   </View>
                   <Pressable onPress={() => setEditingGoal(g)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Edit">
                     <Pencil size={16} color={palette.primary} />
@@ -93,7 +100,7 @@ function GoalsTab() {
                 <ProgressBar value={progress} color={palette.primary} />
                 <View style={styles.goalFoot}>
                   <Text style={{ fontSize: 12, color: palette.textMuted }}>
-                    {formatMoney(g.currentAmount, currency, { compact: true })} / {formatMoney(g.targetAmount, currency, { compact: true })}
+                    {formatMoney(saved, currency, { compact: true })} / {formatMoney(g.targetAmount, currency, { compact: true })}
                   </Text>
                   <Text style={{ fontSize: 12, fontWeight: '700', color: palette.primary }}>{formatPercent(progress)}</Text>
                 </View>
@@ -104,8 +111,8 @@ function GoalsTab() {
                     ? 'Overdue — target date has passed'
                   : required !== null
                     ? monthlyGap > 0
-                      ? `Plan: ${formatMoney(g.monthlyContribution, currency, { compact: true })}/mo · add ${formatMoney(monthlyGap, currency, { compact: true })}/mo`
-                      : `On track with ${formatMoney(g.monthlyContribution, currency, { compact: true })}/mo`
+                      ? `Plan: ${formatMoney(monthlyPlan, currency, { compact: true })}/mo · add ${formatMoney(monthlyGap, currency, { compact: true })}/mo`
+                      : `On track with ${formatMoney(monthlyPlan, currency, { compact: true })}/mo`
                     : 'Goal reached!'}
                 </Text>
               </View>
@@ -143,8 +150,15 @@ function GoalSheet({
   onSave?: (g: Partial<Goal>) => void;
   initial?: Goal;
 }) {
-  const { palette } = useUi();
+  const { palette, data } = useUi();
   const [name, setName] = useState(initial?.name ?? '');
+  const [linkedIds, setLinkedIds] = useState<string[]>(initial?.linkedIds ?? []);
+  const linked = linkedIds.length > 0;
+  const holdings = [
+    ...data.assets.map((a) => ({ id: a.id, name: a.name })),
+    ...data.investments.filter((i) => i.status !== 'closed').map((i) => ({ id: i.id, name: i.name })),
+  ];
+  const toggleLink = (id: string) => setLinkedIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
   const [kind, setKind] = useState<Goal['kind']>(initial?.kind ?? 'retirement');
   const [targetAmount, setTargetAmount] = useState(initial ? String(initial.targetAmount) : '');
   const [currentAmount, setCurrentAmount] = useState(initial ? String(initial.currentAmount) : '');
@@ -163,9 +177,9 @@ function GoalSheet({
     if (!isValidIsoDate(date)) { setError('Use a valid target date in YYYY-MM-DD format.'); return; }
     if (monthly < 0) { setError('Monthly contribution cannot be negative.'); return; }
     setError(null);
-    const fields = { name: name.trim(), kind, targetAmount: ta, currentAmount: ca, targetDate: date, monthlyContribution: monthly };
+    const fields = { name: name.trim(), kind, targetAmount: ta, currentAmount: ca, targetDate: date, monthlyContribution: monthly, linkedIds: linkedIds.length > 0 ? linkedIds : undefined };
     if (initial && onSave) { onSave(fields); }
-    else { onAdd?.(fields); setName(''); setTargetAmount(''); setCurrentAmount(''); setTargetDate(''); setMonthlyContribution(''); onClose(); }
+    else { onAdd?.(fields); setName(''); setTargetAmount(''); setCurrentAmount(''); setTargetDate(''); setMonthlyContribution(''); setLinkedIds([]); onClose(); }
   };
 
   return (
@@ -181,11 +195,11 @@ function GoalSheet({
         </View>
       </Field>
       <View style={styles.twoCol}>
-        <Field money label="Target Amount">
+        <Field half money label="Target Amount">
           <Input value={targetAmount} onChangeText={(t) => setTargetAmount(t.replace(/[^0-9.]/g, ''))} keyboardType="numeric" placeholder="0" />
         </Field>
-        <Field money label="Saved So Far">
-          <Input value={currentAmount} onChangeText={(t) => setCurrentAmount(t.replace(/[^0-9.]/g, ''))} keyboardType="numeric" placeholder="0" />
+        <Field half money label="Saved So Far">
+          <Input value={linked ? 'From linked holdings' : currentAmount} editable={!linked} onChangeText={(t) => setCurrentAmount(t.replace(/[^0-9.]/g, ''))} keyboardType="numeric" placeholder="0" />
         </Field>
       </View>
       <Field label="Target Date">
@@ -193,8 +207,20 @@ function GoalSheet({
       </Field>
       {error && <Text style={{ fontSize: 13, color: palette.danger }}>{error}</Text>}
       <Field money label="Monthly Contribution">
-        <Input value={monthlyContribution} onChangeText={(t) => setMonthlyContribution(t.replace(/[^0-9.]/g, ''))} keyboardType="numeric" placeholder="0" />
+        <Input value={linked ? 'From linked SIPs' : monthlyContribution} editable={!linked} onChangeText={(t) => setMonthlyContribution(t.replace(/[^0-9.]/g, ''))} keyboardType="numeric" placeholder="0" />
       </Field>
+      {holdings.length > 0 && (
+        <Field label="Track with holdings (optional)">
+          <View style={styles.chipRow}>
+            {holdings.map((h) => (
+              <Chip key={h.id} label={h.name} selected={linkedIds.includes(h.id)} onPress={() => toggleLink(h.id)} />
+            ))}
+          </View>
+          <Text style={{ fontSize: 11, color: palette.textMuted, marginTop: 4 }}>
+            Linked goals use the live value of these assets and investments and their recurring contributions.
+          </Text>
+        </Field>
+      )}
       <Button label={initial ? 'Save' : 'Add Goal'} onPress={submit} style={{ marginTop: 8 }} />
     </Sheet>
   );
@@ -202,7 +228,7 @@ function GoalSheet({
 
 function SimulatorTab() {
   const { data, palette, currency } = useUi();
-  const currentNw = netWorth(data);
+  const currentNw = useMemo(() => netWorth(withLiveData(data, todayISO())), [data]);
   const [sip, setSip] = useState('5000');
   const [years, setYears] = useState('10');
   const [ret, setRet] = useState('12');
@@ -233,10 +259,10 @@ function SimulatorTab() {
           <Input value={sip} onChangeText={(t) => setSip(t.replace(/[^0-9.]/g, ''))} keyboardType="numeric" />
         </Field>
         <View style={styles.twoCol}>
-          <Field label="Years">
+          <Field half label="Years">
             <Input value={years} onChangeText={(t) => setYears(t.replace(/[^0-9]/g, ''))} keyboardType="numeric" />
           </Field>
-          <Field label="Annual Return %">
+          <Field half label="Annual Return %">
             <Input value={ret} onChangeText={(t) => setRet(t.replace(/[^0-9.]/g, ''))} keyboardType="numeric" />
           </Field>
         </View>
@@ -261,7 +287,7 @@ function EmergencyTab() {
   const recurringTransactions = useMemo(() => recurringTransactionsThrough(data.transactions, todayISO()), [data.transactions]);
   const avgSpend = useMemo(() => avgMonthlyExpenses(recurringTransactions, todayISO()), [recurringTransactions]);
 
-  const liquid = data.assets.filter((a) => a.liquid).reduce((s, a) => s + a.value, 0);
+  const liquid = useMemo(() => withLiveData(data, todayISO()).assets.filter((a) => a.liquid).reduce((s, a) => s + a.value, 0), [data]);
   const target = avgSpend * monthsNum;
   const progress = target > 0 ? Math.min(1, liquid / target) : 0;
 
@@ -308,9 +334,10 @@ function EmergencyTab() {
 
 function DebtPlannerTab() {
   const { data, palette, currency } = useUi();
-  const { snowball, avalanche } = debtStrategies(data.debts);
+  const debts = useMemo(() => withLiveData(data, todayISO()).debts, [data]);
+  const { snowball, avalanche } = debtStrategies(debts);
 
-  const openDebts = data.debts.filter((debt) => debt.status !== 'closed');
+  const openDebts = debts.filter((debt) => debt.status !== 'closed');
   if (openDebts.length === 0) {
     return <EmptyState title="No debts to plan" subtitle="Add debts in the Assets tab to see payoff strategies." />;
   }
@@ -357,7 +384,7 @@ function DebtPlannerTab() {
 
       <Card>
         <SectionTitle title="Payoff Timeline" />
-        {data.debts.filter((d) => d.status !== 'closed').map((d) => {
+        {openDebts.map((d) => {
           const m = debtPayoffMonths(d);
           return (
             <View key={d.id} style={styles.timelineRow}>

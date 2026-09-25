@@ -7,9 +7,9 @@ import type {
 
 export const DEFAULT_CURRENCIES: Currency[] = [
   { code: 'INR', symbol: '₹', rate: 1 },
-  { code: 'USD', symbol: '$', rate: 0.012 },
-  { code: 'EUR', symbol: '€', rate: 0.011 },
-  { code: 'GBP', symbol: '£', rate: 0.0095 },
+  { code: 'USD', symbol: '$', rate: 0.0104 }, // ≈ ₹96.1 per $ (Sep 2026)
+  { code: 'EUR', symbol: '€', rate: 0.00905 }, // ≈ ₹110.4 per €
+  { code: 'GBP', symbol: '£', rate: 0.00776 }, // ≈ ₹128.8 per £
 ];
 
 export const DEFAULT_CATEGORIES: Category[] = [
@@ -50,7 +50,8 @@ export const DEFAULT_SETTINGS: Settings = {
   reminderEnabled: false,
   backupFreq: 'none',
   lastBackupDate: null,
-  plan: 'free',
+  linkPaymentsToCash: false,
+  cashLinkStart: null,
 };
 
 export const DEFAULT_DATA: AppData = {

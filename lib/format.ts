@@ -7,25 +7,28 @@ export function getCurrency(currencies: Currency[], code: string): Currency {
 /** Convert an amount stored in base currency (INR) to the display currency. */
 export function formatMoney(amountInBase: number, currency: Currency, opts?: { compact?: boolean }): string {
   const converted = amountInBase * currency.rate;
+  // Format the magnitude and put the sign in front of the symbol: -₹90,000, not ₹-90,000.
   const abs = Math.abs(converted);
   const isINR = currency.code === 'INR';
   let str: string;
   if (opts?.compact) {
     if (isINR) {
-      if (abs >= 10_000_000) str = `${(converted / 10_000_000).toFixed(2)}Cr`;
-      else if (abs >= 100_000) str = `${(converted / 100_000).toFixed(1)}L`;
-      else if (abs >= 1_000) str = `${(converted / 1_000).toFixed(1)}K`;
-      else str = converted.toLocaleString(undefined, { maximumFractionDigits: 0 });
+      if (abs >= 10_000_000) str = `${(abs / 10_000_000).toFixed(2)}Cr`;
+      else if (abs >= 100_000) str = `${(abs / 100_000).toFixed(1)}L`;
+      else if (abs >= 1_000) str = `${(abs / 1_000).toFixed(1)}K`;
+      else str = abs.toLocaleString(undefined, { maximumFractionDigits: 0 });
     } else {
-      if (abs >= 1_000_000_000) str = `${(converted / 1_000_000_000).toFixed(2)}B`;
-      else if (abs >= 1_000_000) str = `${(converted / 1_000_000).toFixed(2)}M`;
-      else if (abs >= 1_000) str = `${(converted / 1_000).toFixed(1)}K`;
-      else str = converted.toLocaleString(undefined, { maximumFractionDigits: 0 });
+      if (abs >= 1_000_000_000) str = `${(abs / 1_000_000_000).toFixed(2)}B`;
+      else if (abs >= 1_000_000) str = `${(abs / 1_000_000).toFixed(2)}M`;
+      else if (abs >= 1_000) str = `${(abs / 1_000).toFixed(1)}K`;
+      else str = abs.toLocaleString(undefined, { maximumFractionDigits: 0 });
     }
   } else {
-    str = converted.toLocaleString(undefined, { maximumFractionDigits: 0 });
+    str = abs.toLocaleString(undefined, { maximumFractionDigits: 0 });
   }
-  return `${currency.symbol}${str}`;
+  // A value that rounds to zero shouldn't show as "-₹0".
+  const negative = converted < 0 && /[1-9]/.test(str);
+  return `${negative ? '-' : ''}${currency.symbol}${str}`;
 }
 
 export function formatPercent(value: number, digits = 1): string {
