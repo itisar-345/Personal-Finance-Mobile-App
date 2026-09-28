@@ -173,7 +173,8 @@ export interface Settings {
   currencyCode: string;
   currencies: Currency[];
   theme: 'light' | 'dark' | 'system';
-  pin: string | null;
+  /** The PIN hash itself lives in the OS keystore (see lib/pinStorage.ts), not here — this just gates the lock screen. */
+  pinEnabled: boolean;
   /** Consecutive wrong PIN entries, and when the lockout after too many of them ends (epoch ms). */
   pinFailedAttempts: number;
   pinLockedUntil: number | null;

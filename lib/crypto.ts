@@ -1,7 +1,9 @@
 import * as Crypto from 'expo-crypto';
 
 // Stored format: v2$<rounds>$<salt>$<hash>. Older builds stored a bare 64-char hex SHA-256 of `fintrack::<pin>`.
-const ROUNDS = 1000;
+// The rounds count travels with the hash, so raising it only affects newly-set PINs — existing hashes
+// keep verifying against whatever count they were created with.
+const ROUNDS = 10000;
 
 async function sha256(input: string): Promise<string> {
   return Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, input);

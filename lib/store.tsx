@@ -18,6 +18,7 @@ import type {
 import { DEFAULT_DATA, genId } from './defaults';
 import { ALLOCATION_KEYS, bandForAge, assetsAfterPayments } from './calc';
 import { hashPin } from './crypto';
+import { savePinHash } from './pinStorage';
 import { isValidIsoDate, todayISO } from './format';
 
 interface StoreContextValue {
@@ -60,6 +61,7 @@ interface StoreContextValue {
   setDebtStatus: (id: string, status: ItemStatus, date?: string) => void;
   // settings
   updateSettings: (s: Partial<Settings>) => void;
+  setPin: (pin: string | null) => Promise<void>;
   setAllocationTargets: (t: AllocationTarget) => void;
   // bulk
   importData: (d: AppData) => void;
@@ -150,6 +152,9 @@ const STATUSES = ['active', 'paused', 'closed'] as const;
  */
 function normalizeData(input?: Partial<AppData> | null): AppData {
   const settings: Partial<Settings> = isObj(input?.settings) ? (input!.settings as Partial<Settings>) : {};
+  // Older data files stored the PIN hash directly here as plaintext-readable JSON (settings.pin). It is
+  // migrated into SecureStore by StoreProvider before this runs, so make sure it never gets re-persisted.
+  if ('pin' in settings) delete (settings as Record<string, unknown>).pin;
   const date = todayISO();
   const categoryIds = new Set<string>();
 
@@ -266,6 +271,7 @@ function normalizeData(input?: Partial<AppData> | null): AppData {
         : null,
       linkPaymentsToCash: settings.linkPaymentsToCash === true,
       cashLinkStart: typeof settings.cashLinkStart === 'string' && isValidIsoDate(settings.cashLinkStart) ? settings.cashLinkStart : null,
+      pinEnabled: settings.pinEnabled === true,
       pinFailedAttempts: isNum(settings.pinFailedAttempts) ? settings.pinFailedAttempts : 0,
       pinLockedUntil: isNum(settings.pinLockedUntil) ? settings.pinLockedUntil : null,
     },
@@ -282,7 +288,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     (async () => {
       const parsed = await readData<AppData>();
       if (parsed) {
-        setData(normalizeData(parsed));
+        // One-time migration: earlier builds kept the PIN hash as plain-JSON settings.pin. Move it into
+        // SecureStore and drop it from the data file (normalizeData strips the raw field either way).
+        const legacyPin = (parsed as { settings?: { pin?: unknown } }).settings?.pin;
+        const migratedPinEnabled = typeof legacyPin === 'string' && legacyPin.length > 0;
+        if (migratedPinEnabled) await savePinHash(legacyPin as string);
+        const normalized = normalizeData(parsed);
+        const next = migratedPinEnabled ? { ...normalized, settings: { ...normalized.settings, pinEnabled: true } } : normalized;
+        setData(next);
+        // Persist immediately so the plaintext hash is gone from disk on this run, not just in memory.
+        if (migratedPinEnabled) writeData(next);
       }
       setReady(true);
     })();
@@ -604,13 +619,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const updateSettings = useCallback(async (s: Partial<Settings>) => {
     const patch = { ...s };
-    if (s.pin !== undefined && s.pin !== null && s.pin !== '') {
-      patch.pin = await hashPin(s.pin);
-    }
-    if (s.pin !== undefined) {
-      patch.pinFailedAttempts = 0;
-      patch.pinLockedUntil = null;
-    }
     setData((prev) => {
       if (s.age !== undefined && !prev.settings.allocationTargets?.custom) {
         patch.allocationTargets = s.age === null ? null : bandForAge(s.age);
@@ -619,6 +627,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         patch.cashLinkStart = s.linkPaymentsToCash ? todayISO() : null;
       }
       const next = { ...prev, settings: { ...prev.settings, ...patch } };
+      save(next);
+      return next;
+    });
+  }, []);
+
+  /** Set, change, or (pin: null) remove the app-lock PIN. The hash lives in SecureStore, never in the data file. */
+  const setPin = useCallback(async (pin: string | null) => {
+    await savePinHash(pin ? await hashPin(pin) : null);
+    setData((prev) => {
+      const next = { ...prev, settings: { ...prev.settings, pinEnabled: !!pin, pinFailedAttempts: 0, pinLockedUntil: null } };
       save(next);
       return next;
     });
@@ -634,16 +652,21 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const importData = useCallback((d: AppData) => {
     const imported = normalizeData(d);
-    persist({ ...imported, settings: { ...imported.settings, pin: null, pinFailedAttempts: 0, pinLockedUntil: null, onboarded: true } });
+    // A restored backup never carries a PIN (exportData never includes one), so make sure the device's
+    // own PIN state agrees: clear any stored hash rather than leaving it orphaned against pinEnabled: false.
+    savePinHash(null);
+    persist({ ...imported, settings: { ...imported.settings, pinEnabled: false, pinFailedAttempts: 0, pinLockedUntil: null, onboarded: true } });
   }, [persist]);
 
   const resetData = useCallback(() => {
+    savePinHash(null);
     persist(normalizeData(DEFAULT_DATA));
   }, [persist]);
 
   const exportData = useCallback(() => {
-    const { pin: _pin, ...safeSettings } = data.settings;
-    return { ...data, settings: { ...safeSettings, pin: null, pinFailedAttempts: 0, pinLockedUntil: null } };
+    // The PIN hash was never in `data.settings` to begin with (it lives in SecureStore), so there is
+    // nothing to strip here beyond the non-secret lockout counters, which are meaningless off-device.
+    return { ...data, settings: { ...data.settings, pinFailedAttempts: 0, pinLockedUntil: null } };
   }, [data]);
 
   const value: StoreContextValue = {
@@ -676,6 +699,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setInvestmentStatus,
     setDebtStatus,
     updateSettings,
+    setPin,
     setAllocationTargets,
     importData,
     resetData,

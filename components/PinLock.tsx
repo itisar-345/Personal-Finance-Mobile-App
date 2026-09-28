@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { useUi } from './ui';
 import { useStore } from '../lib/store';
 import { verifyPin } from '../lib/crypto';
+import { loadPinHash } from '../lib/pinStorage';
 
 const FREE_ATTEMPTS = 4;
 const BASE_LOCK_MS = 30_000;
@@ -20,6 +21,11 @@ export function PinLock({ onUnlock }: { onUnlock: () => void }) {
   const [error, setError] = useState(false);
   const [checking, setChecking] = useState(false);
   const [now, setNow] = useState(Date.now());
+  const [hash, setHash] = useState<string | null>(null);
+
+  useEffect(() => {
+    loadPinHash().then(setHash);
+  }, []);
 
   const lockedUntil = data.settings.pinLockedUntil ?? 0;
   const secondsLeft = Math.max(0, Math.ceil((lockedUntil - now) / 1000));
@@ -32,14 +38,14 @@ export function PinLock({ onUnlock }: { onUnlock: () => void }) {
   }, [locked]);
 
   const press = (d: string) => {
-    if (locked || checking || entry.length >= 4) return;
+    if (locked || checking || hash === null || entry.length >= 4) return;
     const next = entry + d;
     setEntry(next);
     setError(false);
     if (next.length < 4) return;
 
     setChecking(true);
-    verifyPin(next, data.settings.pin || '')
+    verifyPin(next, hash || '')
       .then((ok) => {
         if (ok) {
           updateSettings({ pinFailedAttempts: 0, pinLockedUntil: null });
@@ -80,7 +86,7 @@ export function PinLock({ onUnlock }: { onUnlock: () => void }) {
           d === '' ? (
             <View key={i} style={styles.keyEmpty} />
           ) : (
-            <Pressable key={i} disabled={locked} accessibilityRole="button" accessibilityLabel={d === '⌫' ? 'Delete digit' : d} style={[styles.key, { backgroundColor: palette.surface, borderColor: palette.border }]} onPress={() => (d === '⌫' ? setEntry((e) => e.slice(0, -1)) : press(d))}>
+            <Pressable key={i} disabled={locked || (d !== '⌫' && hash === null)} accessibilityRole="button" accessibilityLabel={d === '⌫' ? 'Delete digit' : d} style={[styles.key, { backgroundColor: palette.surface, borderColor: palette.border }]} onPress={() => (d === '⌫' ? setEntry((e) => e.slice(0, -1)) : press(d))}>
               <Text style={[styles.keyText, { color: palette.text }]}>{d}</Text>
             </Pressable>
           ),

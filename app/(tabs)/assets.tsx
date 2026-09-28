@@ -1016,7 +1016,7 @@ function AllocationTab() {
           <SectionTitle title="Drift & Rebalancing" />
           {(target?.customTargets?.length ?? 0) > 0 && (
             <Text style={{ fontSize: 11, color: palette.textMuted, marginBottom: 8 }}>
-              Custom targets can't be matched to holdings, so drift compares your built-in targets rescaled to 100%.
+              Custom targets can&apos;t be matched to holdings, so drift compares your built-in targets rescaled to 100%.
             </Text>
           )}
           {drift.map((d) => {

@@ -37,7 +37,7 @@ function Gate({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const sub = AppState.addEventListener('change', (next) => {
       if (appState.current === 'active' && next === 'background') {
-        if (dataRef.current.settings.pin) setUnlocked(false);
+        if (dataRef.current.settings.pinEnabled) setUnlocked(false);
       }
       if (next === 'active' && dataRef.current.settings.reminderEnabled) {
         scheduleRecurringNotifications(dataRef.current);
@@ -59,7 +59,7 @@ function Gate({ children }: { children: React.ReactNode }) {
     return <Onboarding />;
   }
 
-  if (data.settings.pin && !unlocked) {
+  if (data.settings.pinEnabled && !unlocked) {
     return <PinLock onUnlock={() => setUnlocked(true)} />;
   }
 

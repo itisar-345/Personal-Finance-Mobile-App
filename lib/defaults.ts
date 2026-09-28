@@ -40,7 +40,7 @@ export const DEFAULT_SETTINGS: Settings = {
   currencyCode: 'INR',
   currencies: DEFAULT_CURRENCIES,
   theme: 'system',
-  pin: null,
+  pinEnabled: false,
   pinFailedAttempts: 0,
   pinLockedUntil: null,
   age: null,

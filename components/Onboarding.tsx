@@ -7,7 +7,7 @@ import { formatPercent } from '../lib/format';
 
 export function Onboarding() {
   const { palette } = useUi();
-  const { updateSettings, setAllocationTargets } = useStore();
+  const { updateSettings, setPin: savePin, setAllocationTargets } = useStore();
   const [step, setStep] = useState(0);
   const [age, setAge] = useState('');
   const [pin, setPin] = useState('');
@@ -35,7 +35,8 @@ export function Onboarding() {
       other: band.other,
       custom: false,
     });
-    updateSettings({ age: ageNum, pin: pin || null, onboarded: true });
+    updateSettings({ age: ageNum, onboarded: true });
+    if (pin) savePin(pin);
   };
 
   return (

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, Share, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { requestNotificationPermission, scheduleRecurringNotifications, cancelAllNotifications } from '@/lib/notifications';
+import { shareFile } from '@/lib/share';
 import { Card, SectionTitle, useUi, Chip, Button, Input, Field, StatusBadge, LifecycleActions } from '@/components/ui';
 import { Sheet } from '@/components/Sheet';
 import { useStore } from '@/lib/store';
@@ -54,7 +55,8 @@ export default function SettingsScreen() {
       URL.revokeObjectURL(url);
     } else {
       try {
-        await Share.share({ message: json, title: 'FinTrack Backup' });
+        const shared = await shareFile(json, `fintrack-backup-${today}.json`, 'application/json');
+        if (!shared) await Share.share({ message: json, title: 'FinTrack Backup' });
       } catch { return; }
     }
     updateSettings({ lastBackupDate: today });
@@ -66,7 +68,7 @@ export default function SettingsScreen() {
     return '"' + safe.replace(/"/g, '""') + '"';
   };
 
-  const doExportCsv = () => {
+  const doExportCsv = async () => {
     const rows = ['date,type,amount,category,note,recurring'];
     for (const t of data.transactions) {
       const cat = data.categories.find((c) => c.id === t.categoryId)?.name || '';
@@ -82,7 +84,10 @@ export default function SettingsScreen() {
       a.click();
       URL.revokeObjectURL(url);
     } else {
-      Share.share({ message: csv, title: 'FinTrack Transactions' }).catch(() => {});
+      try {
+        const shared = await shareFile(csv, `fintrack-transactions-${todayISO()}.csv`, 'text/csv');
+        if (!shared) await Share.share({ message: csv, title: 'FinTrack Transactions' });
+      } catch { /* user dismissed the share sheet — nothing to do */ }
     }
   };
 
@@ -174,7 +179,7 @@ export default function SettingsScreen() {
           <SectionTitle title="Security" action={<Lock size={16} color={palette.textMuted} />} />
           <Pressable style={styles.rowAction} onPress={() => setPinSheet(true)}>
             <Text style={{ fontSize: 14, color: palette.text }}>App PIN</Text>
-            <Text style={{ fontSize: 14, color: palette.textMuted }}>{settings.pin ? 'Enabled' : 'Disabled'}</Text>
+            <Text style={{ fontSize: 14, color: palette.textMuted }}>{settings.pinEnabled ? 'Enabled' : 'Disabled'}</Text>
           </Pressable>
         </Card>
 
@@ -298,20 +303,20 @@ function ThemeOption({ icon, label, selected, onPress }: { icon: React.ReactNode
 
 function PinSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const { palette } = useUi();
-  const { data, updateSettings } = useStore();
+  const { data, setPin: savePin } = useStore();
   const [pin, setPin] = useState('');
   const [confirm, setConfirm] = useState('');
 
   const save = async () => {
     if (pin && pin.length !== 4) return;
     if (pin && pin !== confirm) return;
-    await updateSettings({ pin: pin || null });
+    await savePin(pin || null);
     setPin(''); setConfirm('');
     onClose();
   };
 
   const remove = () => {
-    updateSettings({ pin: null });
+    savePin(null);
     setPin(''); setConfirm('');
     onClose();
   };
@@ -319,7 +324,7 @@ function PinSheet({ visible, onClose }: { visible: boolean; onClose: () => void 
   return (
     <Sheet visible={visible} onClose={onClose} title="App PIN">
       <Text style={{ fontSize: 12, color: palette.textMuted, marginBottom: 8 }}>
-        {data.settings.pin ? 'PIN is currently enabled. Enter a new 4-digit PIN to change it, or remove it below.' : 'Set a 4-digit PIN to lock the app on launch.'}
+        {data.settings.pinEnabled ? 'PIN is currently enabled. Enter a new 4-digit PIN to change it, or remove it below.' : 'Set a 4-digit PIN to lock the app on launch.'}
       </Text>
       <Field label="4-digit PIN">
         <Input value={pin} onChangeText={(t) => setPin(t.replace(/[^0-9]/g, '').slice(0, 4))} keyboardType="numeric" placeholder="Leave empty to disable" />
@@ -331,7 +336,7 @@ function PinSheet({ visible, onClose }: { visible: boolean; onClose: () => void 
       )}
       <View style={{ flexDirection: 'row', gap: 12, marginTop: 8 }}>
         <Button label="Save" onPress={save} style={{ flex: 1 }} />
-        {data.settings.pin && <Button label="Remove PIN" variant="danger" onPress={remove} style={{ flex: 1 }} />}
+        {data.settings.pinEnabled && <Button label="Remove PIN" variant="danger" onPress={remove} style={{ flex: 1 }} />}
       </View>
     </Sheet>
   );
@@ -507,14 +512,26 @@ function ImportJsonSheet({
     }
   };
 
+  const pickNativeFile = async () => {
+    const DocumentPicker = await import('expo-document-picker');
+    const picked = await DocumentPicker.getDocumentAsync({ type: ['application/json', 'text/*', '*/*'], copyToCacheDirectory: true });
+    if (picked.canceled || !picked.assets?.[0]) return;
+    try {
+      const FileSystem = await import('expo-file-system/legacy');
+      const content = await FileSystem.readAsStringAsync(picked.assets[0].uri, { encoding: FileSystem.EncodingType.UTF8 });
+      setText(content);
+      setResult(null);
+    } catch {
+      setResult({ ok: false, message: 'Could not read that file.' });
+    }
+  };
+
   return (
     <Sheet visible={visible} onClose={onClose} title="Import Backup (JSON)">
       <Text style={{ fontSize: 13, color: palette.textMuted, marginBottom: 8 }}>
-        {Platform.OS === 'web'
-          ? 'Paste a JSON backup below, or upload a .json backup file. This will replace all current data.'
-          : 'Paste a JSON backup below. This will replace all current data.'}
+        Paste a JSON backup below, or upload a .json backup file. This will replace all current data.
       </Text>
-      {Platform.OS === 'web' && (
+      {Platform.OS === 'web' ? (
         <Field label="Upload .json file">
           <input
             type="file"
@@ -529,8 +546,10 @@ function ImportJsonSheet({
             style={{ fontSize: 13, color: palette.text }}
           />
         </Field>
+      ) : (
+        <Button label="Choose .json file" variant="outline" onPress={pickNativeFile} style={{ marginBottom: 12 }} />
       )}
-      <Field label={Platform.OS === 'web' ? 'Or paste JSON text' : 'Paste JSON text'}>
+      <Field label="Or paste JSON text">
         <Input
           value={text}
           onChangeText={setText}
@@ -836,7 +855,7 @@ function CategorySheet({ visible, onClose }: { visible: boolean; onClose: () => 
       {pendingDelete && (
         <View style={[styles.aboutCard, { backgroundColor: palette.danger + '11', borderColor: palette.danger + '44', marginBottom: 8 }]}>
           <Text style={{ fontSize: 13, color: palette.danger, fontWeight: '600', marginBottom: 8 }}>
-            Remove "{pendingDelete.name}"?{deleteNote(pendingDelete)}
+            Remove &quot;{pendingDelete.name}&quot;?{deleteNote(pendingDelete)}
           </Text>
           <View style={{ flexDirection: 'row', gap: 10 }}>
             <Button label="Cancel" variant="outline" onPress={() => setPendingDelete(null)} style={{ flex: 1 }} />
