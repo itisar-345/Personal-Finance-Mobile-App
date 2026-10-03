@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { createContext, useContext } from 'react';
 import {
   View,
   Text,
@@ -59,7 +59,7 @@ export function Button({
       : variant === 'danger'
       ? palette.danger
       : 'transparent';
-  const fg = variant === 'primary' ? palette.primaryText : variant === 'danger' ? '#fff' : palette.text;
+  const fg = variant === 'primary' ? palette.primaryText : variant === 'danger' ? palette.dangerText : palette.text;
   const border = variant === 'outline' ? palette.border : 'transparent';
   return (
     <Pressable
@@ -112,6 +112,9 @@ export function Chip({
   );
 }
 
+// Lets an Input announce the label of the Field it sits in, so screen readers read more than "edit text".
+const FieldLabelContext = createContext<string | undefined>(undefined);
+
 /**
  * `half` sizes the field to share a row equally (put two in a row View); without it the second one overflows.
  * `money` marks an amount input. Amounts are always entered in the base currency (rate 1), so when a
@@ -124,16 +127,18 @@ export function Field({ label, money, half, children }: { label: string; money?:
   return (
     <View style={[styles.field, half && styles.fieldHalf]}>
       <Text style={[styles.fieldLabel, { color: palette.textMuted }]}>{label}{suffix}</Text>
-      {children}
+      <FieldLabelContext.Provider value={label + suffix}>{children}</FieldLabelContext.Provider>
     </View>
   );
 }
 
 export function Input(props: React.ComponentProps<typeof RNTextInput>) {
   const { palette } = useUi();
+  const fieldLabel = useContext(FieldLabelContext);
   const { style, ...rest } = props;
   return (
     <RNTextInput
+      accessibilityLabel={fieldLabel}
       placeholderTextColor={palette.textMuted}
       style={[
         styles.input,
@@ -160,7 +165,7 @@ export function RiskBadge({ zone }: { zone: 'green' | 'yellow' | 'red' }) {
   const color = zone === 'green' ? palette.success : zone === 'yellow' ? palette.warning : palette.danger;
   const label = zone === 'green' ? 'Healthy' : zone === 'yellow' ? 'Caution' : 'High Risk';
   return (
-    <View style={[styles.badge, { backgroundColor: color + '22', borderColor: color }]}>
+    <View style={[styles.badge, { backgroundColor: color + '11', borderColor: color }]}>
       <Text style={[styles.badgeText, { color }]}>{label}</Text>
     </View>
   );
@@ -172,7 +177,7 @@ export function StatusBadge({ status }: { status: 'active' | 'paused' | 'closed'
   const color = status === 'paused' ? palette.warning : palette.textMuted;
   const label = status === 'paused' ? 'Paused' : 'Closed';
   return (
-    <View style={[styles.badge, { backgroundColor: color + '22', borderColor: color }]}>
+    <View style={[styles.badge, { backgroundColor: color + '11', borderColor: color }]}>
       <Text style={[styles.badgeText, { color }]}>{label}</Text>
     </View>
   );
@@ -219,6 +224,25 @@ export function LifecycleActions({
   );
 }
 
+/** An unticked-by-default checkbox for consents. `children` is the label and may contain links. */
+export function Checkbox({ checked, onChange, label, children }: { checked: boolean; onChange: (v: boolean) => void; label: string; children: React.ReactNode }) {
+  const { palette } = useUi();
+  return (
+    <Pressable
+      onPress={() => onChange(!checked)}
+      accessibilityRole="checkbox"
+      accessibilityLabel={label}
+      accessibilityState={{ checked }}
+      style={styles.checkRow}
+    >
+      <View style={[styles.checkBox, { borderColor: checked ? palette.primary : palette.textMuted, backgroundColor: checked ? palette.primary : 'transparent' }]}>
+        {checked && <Text style={{ color: palette.primaryText, fontSize: 14, fontWeight: '800', lineHeight: 16 }}>✓</Text>}
+      </View>
+      <View style={{ flex: 1 }}>{children}</View>
+    </Pressable>
+  );
+}
+
 export type { Palette, Settings, Currency };
 
 const styles = StyleSheet.create({
@@ -244,5 +268,7 @@ const styles = StyleSheet.create({
   badge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, borderWidth: 1 },
   badgeText: { fontSize: 11, fontWeight: '700' },
   lifecycleRow: { flexDirection: 'row', gap: 8, marginTop: 4 },
+  checkRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, paddingVertical: 6 },
+  checkBox: { width: 22, height: 22, borderRadius: 6, borderWidth: 2, alignItems: 'center', justifyContent: 'center', marginTop: 1 },
   lifecycleBtn: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8, borderWidth: 1 },
 });

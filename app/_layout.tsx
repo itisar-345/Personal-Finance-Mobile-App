@@ -6,6 +6,9 @@ import { StoreProvider, useStore } from '@/lib/store';
 import { useTheme } from '@/lib/theme';
 import { Onboarding } from '@/components/Onboarding';
 import { PinLock } from '@/components/PinLock';
+import { LegalUpdate } from '@/components/Legal';
+import { StorageNotice } from '@/components/StorageNotice';
+import { LEGAL_VERSION } from '@/lib/legal';
 import { buildReminderItems, scheduleRecurringNotifications } from '@/lib/notifications';
 
 function Gate({ children }: { children: React.ReactNode }) {
@@ -63,23 +66,31 @@ function Gate({ children }: { children: React.ReactNode }) {
     return <PinLock onUnlock={() => setUnlocked(true)} />;
   }
 
+  if (data.settings.legalAcceptedVersion !== LEGAL_VERSION) {
+    return <LegalUpdate />;
+  }
+
   return <>{children}</>;
 }
 
 export default function RootLayout() {
   return (
     <StoreProvider>
-      <Gate>
-        <Stack screenOptions={{ headerShown: false }}>
-          <Stack.Screen name="(tabs)" />
-          <Stack.Screen name="+not-found" />
-        </Stack>
-        <StatusBar style="auto" />
-      </Gate>
+      <View style={styles.root}>
+        <Gate>
+          <Stack screenOptions={{ headerShown: false }}>
+            <Stack.Screen name="(tabs)" />
+            <Stack.Screen name="+not-found" />
+          </Stack>
+          <StatusBar style="auto" />
+        </Gate>
+        <StorageNotice />
+      </View>
     </StoreProvider>
   );
 }
 
 const styles = StyleSheet.create({
+  root: { flex: 1 },
   loading: { flex: 1, alignItems: 'center', justifyContent: 'center' },
 });

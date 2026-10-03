@@ -128,7 +128,7 @@ function AssetsTab() {
 
       <Card>
         <SectionTitle title="Asset List" action={
-          <Pressable onPress={() => setSheetOpen(true)}>
+          <Pressable onPress={() => setSheetOpen(true)} accessibilityRole="button" accessibilityLabel="Add asset">
             <Text style={{ fontSize: 12, color: palette.primary, fontWeight: '600' }}>+ Add</Text>
           </Pressable>
         } />
@@ -145,10 +145,10 @@ function AssetsTab() {
                 <Text style={{ fontSize: 11, color: palette.textMuted }}>{a.type} · {a.liquid ? 'Liquid' : 'Illiquid'}</Text>
               </View>
               <Text style={{ fontSize: 14, fontWeight: '700', color: palette.text }}>{formatMoney(a.value, currency, { compact: true })}</Text>
-              <Pressable onPress={() => setEditingAsset(a)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Edit">
+              <Pressable onPress={() => setEditingAsset(a)} hitSlop={8} accessibilityRole="button" accessibilityLabel={`Edit ${a.name}`}>
                 <Pencil size={16} color={palette.primary} />
               </Pressable>
-              <Pressable onPress={() => setPendingDelete(a)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Delete">
+              <Pressable onPress={() => setPendingDelete(a)} hitSlop={8} accessibilityRole="button" accessibilityLabel={`Delete ${a.name}`}>
                 <Trash2 size={16} color={palette.danger} />
               </Pressable>
             </View>
@@ -278,7 +278,7 @@ function InvestmentsTab() {
 
       <Card>
         <SectionTitle title="Holdings" action={
-          <Pressable onPress={() => setSheetOpen(true)}>
+          <Pressable onPress={() => setSheetOpen(true)} accessibilityRole="button" accessibilityLabel="Add investment">
             <Text style={{ fontSize: 12, color: palette.primary, fontWeight: '600' }}>+ Add</Text>
           </Pressable>
         } />
@@ -320,10 +320,10 @@ function InvestmentsTab() {
                     {gain >= 0 ? '+' : '-'}{formatMoney(Math.abs(gain), currency, { compact: true })}
                   </Text>
                 </View>
-                <Pressable onPress={() => setEditingInvestment(inv)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Edit">
+                <Pressable onPress={() => setEditingInvestment(inv)} hitSlop={8} accessibilityRole="button" accessibilityLabel={`Edit ${inv.name}`}>
                   <Pencil size={16} color={palette.primary} />
                 </Pressable>
-                <Pressable onPress={() => setPendingDelete(inv)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Delete">
+                <Pressable onPress={() => setPendingDelete(inv)} hitSlop={8} accessibilityRole="button" accessibilityLabel={`Delete ${inv.name}`}>
                   <Trash2 size={16} color={palette.danger} />
                 </Pressable>
               </View>
@@ -544,7 +544,7 @@ function DebtsTab() {
 
       <Card>
         <SectionTitle title="Debts" action={
-          <Pressable onPress={() => setSheetOpen(true)}>
+          <Pressable onPress={() => setSheetOpen(true)} accessibilityRole="button" accessibilityLabel="Add debt">
             <Text style={{ fontSize: 12, color: palette.primary, fontWeight: '600' }}>+ Add</Text>
           </Pressable>
         } />
@@ -574,10 +574,10 @@ function DebtsTab() {
                   <Text style={{ fontSize: 14, fontWeight: '700', color: palette.text }}>{formatMoney(d.outstanding, currency, { compact: true })}</Text>
                   <Text style={{ fontSize: 11, color: palette.textMuted }}>EMI {formatMoney(d.emi, currency, { compact: true })}</Text>
                 </View>
-                <Pressable onPress={() => setEditingDebt(data.debts.find((x) => x.id === d.id) ?? d)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Edit">
+                <Pressable onPress={() => setEditingDebt(data.debts.find((x) => x.id === d.id) ?? d)} hitSlop={8} accessibilityRole="button" accessibilityLabel={`Edit ${d.name}`}>
                   <Pencil size={16} color={palette.primary} />
                 </Pressable>
-                <Pressable onPress={() => setPendingDelete(d)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Delete">
+                <Pressable onPress={() => setPendingDelete(d)} hitSlop={8} accessibilityRole="button" accessibilityLabel={`Delete ${d.name}`}>
                   <Trash2 size={16} color={palette.danger} />
                 </Pressable>
               </View>
@@ -750,10 +750,10 @@ function ContributionsSheet({ investment, onClose }: { investment: Investment; o
               />
             )}
           </View>
-          <Pressable onPress={() => openForm(c)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Edit">
+          <Pressable onPress={() => openForm(c)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Edit contribution">
             <Pencil size={16} color={palette.primary} />
           </Pressable>
-          <Pressable onPress={() => setPendingDelete(c)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Delete">
+          <Pressable onPress={() => setPendingDelete(c)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Delete contribution">
             <Trash2 size={16} color={palette.danger} />
           </Pressable>
         </View>
@@ -955,7 +955,7 @@ function AllocationTab() {
     <View style={{ gap: 14 }}>
       <Card>
         <SectionTitle title="Actual vs. Target" action={
-          <Pressable onPress={editing ? () => setEditing(false) : startEditing}>
+          <Pressable onPress={editing ? () => setEditing(false) : startEditing} accessibilityRole="button">
             <Text style={{ fontSize: 12, color: palette.primary, fontWeight: '600' }}>{editing ? 'Cancel' : 'Edit Target'}</Text>
           </Pressable>
         } />
@@ -977,7 +977,7 @@ function AllocationTab() {
       {editing && (
         <Card>
           <SectionTitle title="Edit Target Allocation" action={
-            <Pressable onPress={addEntry}>
+            <Pressable onPress={addEntry} accessibilityRole="button" accessibilityLabel="Add target">
               <Text style={{ fontSize: 12, color: palette.primary, fontWeight: '600' }}>+ Add</Text>
             </Pressable>
           } />
@@ -985,7 +985,7 @@ function AllocationTab() {
             <View key={entry.id} style={{ marginBottom: 12, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: palette.border }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
                 <Text style={{ fontSize: 12, fontWeight: '700', color: palette.text }}>{entry.key ? entry.name : 'Custom Target'}</Text>
-                <Pressable onPress={() => removeDraftEntry(entry.id)}>
+                <Pressable onPress={() => removeDraftEntry(entry.id)} accessibilityRole="button" accessibilityLabel={`Delete ${entry.key ? entry.name : 'custom target'}`}>
                   <Text style={{ fontSize: 11, color: palette.danger, fontWeight: '600' }}>Delete</Text>
                 </Pressable>
               </View>

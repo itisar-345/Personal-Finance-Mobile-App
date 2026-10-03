@@ -185,7 +185,11 @@ export default function DashboardScreen() {
         {/* Income vs Expense trend */}
         <Card>
           <SectionTitle title="Income vs Expense — Last 6 Months" />
-          <BarChart data={trend.map((t) => ({ label: t.label, value: t.value }))} data2={trend.map((t) => ({ label: t.label, value: t.value2 }))} />
+          <BarChart
+            data={trend.map((t) => ({ label: t.label, value: t.value }))}
+            data2={trend.map((t) => ({ label: t.label, value: t.value2 }))}
+            description={`Income versus expense by month: ${trend.map((t) => `${t.label} income ${formatMoney(t.value, currency, { compact: true })}, expense ${formatMoney(t.value2, currency, { compact: true })}`).join('; ')}`}
+          />
           <View style={styles.legendRow}>
             <Legend color={palette.primary} label="Income" />
             <Legend color={palette.warning} label="Expense" />

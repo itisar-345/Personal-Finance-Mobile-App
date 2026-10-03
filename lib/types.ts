@@ -135,6 +135,20 @@ export interface Goal {
   kind: 'retirement' | 'house' | 'emergency' | 'other';
 }
 
+/** One completed micro-saving quest. The amount was credited to `goalId` (a manual goal) when set. */
+export interface QuestCompletion {
+  id: string;
+  /** Id of a built-in quest (see lib/quests.ts), or 'custom' for a free-form quick save. */
+  questId: string;
+  /** Local ISO date YYYY-MM-DD the quest was completed. */
+  date: string;
+  amount: number;
+  /** XP earned, fixed at completion time (includes any streak bonus). */
+  xp: number;
+  goalId: string | null;
+  note?: string;
+}
+
 export interface Currency {
   code: string;
   symbol: string;
@@ -189,6 +203,11 @@ export interface Settings {
   linkPaymentsToCash: boolean;
   /** Payments after this date are deducted; set when linking is switched on. */
   cashLinkStart: string | null;
+  /** Version of the Terms/Privacy Policy the user accepted (see LEGAL_VERSION), and the ISO date they did. */
+  legalAcceptedVersion: string | null;
+  legalAcceptedAt: string | null;
+  /** Manual goal that completed micro-quests deposit into; null keeps them as a quest-only tally. */
+  questGoalId: string | null;
 }
 
 export interface AppData {
@@ -199,5 +218,6 @@ export interface AppData {
   debts: Debt[];
   goals: Goal[];
   contributions: Contribution[];
+  questLog: QuestCompletion[];
   settings: Settings;
 }

@@ -8,6 +8,11 @@ interface Point {
   value: number;
 }
 
+// Charts are drawn in SVG, which screen readers can't read, so each one exposes a text alternative:
+// the caller's `description` when given, otherwise a summary built from the data.
+const round = (v: number) => Math.round(v).toLocaleString();
+const chartA11y = (label: string) => ({ accessible: true, accessibilityRole: 'image' as const, accessibilityLabel: label });
+
 /** Simple line chart with optional second series. */
 export function LineChart({
   data,
@@ -15,12 +20,14 @@ export function LineChart({
   height = 160,
   color,
   color2,
+  description,
 }: {
   data: Point[];
   data2?: Point[];
   height?: number;
   color?: string;
   color2?: string;
+  description?: string;
 }) {
   const { palette } = useUi();
   const c1 = color || palette.primary;
@@ -29,6 +36,9 @@ export function LineChart({
   const pad = { l: 8, r: 8, t: 12, b: 22 };
   const all = [...data, ...(data2 || [])].map((d) => d.value);
   const max = Math.max(1, ...all);
+  const alt = description ?? (data.length
+    ? `Line chart from ${data[0].label} (${round(data[0].value)}) to ${data[data.length - 1].label} (${round(data[data.length - 1].value)})`
+    : 'Empty line chart');
   const min = Math.min(0, ...all);
   const range = max - min || 1;
   const n = data.length;
@@ -47,7 +57,7 @@ export function LineChart({
   };
 
   return (
-    <View style={{ height, width: '100%' }}>
+    <View style={{ height, width: '100%' }} {...chartA11y(alt)}>
       <Svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`}>
         {[0, 0.5, 1].map((t, i) => (
           <Line
@@ -83,12 +93,14 @@ export function BarChart({
   height = 160,
   color,
   color2,
+  description,
 }: {
   data: Point[];
   data2?: Point[];
   height?: number;
   color?: string;
   color2?: string;
+  description?: string;
 }) {
   const { palette } = useUi();
   const c1 = color || palette.primary;
@@ -97,13 +109,14 @@ export function BarChart({
   const pad = { l: 8, r: 8, t: 12, b: 22 };
   const all = [...data, ...(data2 || [])].map((d) => d.value);
   const max = Math.max(1, ...all);
+  const alt = description ?? `Bar chart: ${data.map((p, i) => `${p.label} ${round(p.value)}${data2 ? ` and ${round(data2[i].value)}` : ''}`).join(', ')}`;
   const n = data.length;
   const groupW = (width - pad.l - pad.r) / Math.max(1, n);
   const barW = Math.min(14, groupW * 0.38);
   const chartH = height - pad.t - pad.b;
 
   return (
-    <View style={{ height, width: '100%' }}>
+    <View style={{ height, width: '100%' }} {...chartA11y(alt)}>
       <Svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`}>
         {data.map((p, i) => {
           const gx = pad.l + i * groupW + groupW / 2;
@@ -131,10 +144,12 @@ export function DonutChart({
   data,
   size = 160,
   thickness = 28,
+  description,
 }: {
   data: { label: string; value: number; color?: string }[];
   size?: number;
   thickness?: number;
+  description?: string;
 }) {
   const { palette } = useUi();
   const [hovered, setHovered] = useState<string | null>(null);
@@ -145,9 +160,12 @@ export function DonutChart({
   const hoveredData = useMemo(() => data.find((d) => d.label === hovered) ?? null, [data, hovered]);
   let acc = 0;
   const circumference = 2 * Math.PI * r;
+  const alt = description ?? (data.length
+    ? `Donut chart: ${data.map((d) => `${d.label} ${((d.value / total) * 100).toFixed(0)}%`).join(', ')}`
+    : 'Empty donut chart');
 
   return (
-    <View style={{ width: size, height: size + 28, alignSelf: 'center' }}>
+    <View style={{ width: size, height: size + 28, alignSelf: 'center' }} {...chartA11y(alt)}>
       <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
         <Circle cx={cx} cy={cy} r={r} fill="none" stroke={palette.surfaceAlt} strokeWidth={thickness} />
         {data.map((d, i) => {
@@ -199,7 +217,12 @@ export function ProgressBar({
   const { palette } = useUi();
   const w = Math.max(0, Math.min(1, value)) * 100;
   return (
-    <View style={{ height, backgroundColor: palette.surfaceAlt, borderRadius: height / 2, overflow: 'hidden' }}>
+    <View
+      accessible
+      accessibilityRole="progressbar"
+      accessibilityValue={{ min: 0, max: 100, now: Math.round(w) }}
+      style={{ height, backgroundColor: palette.surfaceAlt, borderRadius: height / 2, overflow: 'hidden' }}
+    >
       <View style={{ width: `${w}%`, height, backgroundColor: color || palette.primary }} />
     </View>
   );
@@ -225,7 +248,7 @@ export function Gauge({
   const v = Math.max(0, Math.min(1, value));
   const c = color || palette.primary;
   return (
-    <View style={{ width: size, height: size / 2 + 20, alignSelf: 'center' }}>
+    <View style={{ width: size, height: size / 2 + 20, alignSelf: 'center' }} {...chartA11y(`Gauge: ${label || `${(v * 100).toFixed(0)}%`}`)}>
       <Svg width={size} height={size / 2 + 20} viewBox={`0 0 ${size} ${size / 2 + 20}`}>
         <Path
           d={`M ${12} ${cy} A ${r} ${r} 0 0 1 ${size - 12} ${cy}`}

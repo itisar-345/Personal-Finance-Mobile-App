@@ -6,15 +6,39 @@
     "scheme": "fintrack",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
+    "icon": "./assets/images/icon.png",
     "plugins": [
       "expo-router",
       "expo-notifications",
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 220,
+          "resizeMode": "contain",
+          "backgroundColor": "#3730A3"
+        }
+      ]
     ],
     "android": {
+      "package": "com.itisar345.fintrack",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "backgroundColor": "#3730A3"
+      },
       "permissions": [
         "POST_NOTIFICATIONS"
+      ],
+      "allowBackup": false,
+      "blockedPermissions": [
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE"
       ]
+    },
+    "web": {
+      "favicon": "./assets/images/favicon.png"
     }
   }
 }

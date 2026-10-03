@@ -5,10 +5,12 @@ import { requestNotificationPermission, scheduleRecurringNotifications, cancelAl
 import { shareFile } from '@/lib/share';
 import { Card, SectionTitle, useUi, Chip, Button, Input, Field, StatusBadge, LifecycleActions } from '@/components/ui';
 import { Sheet } from '@/components/Sheet';
+import { LegalSheet } from '@/components/Legal';
+import { BUSINESS, type LegalDocId } from '@/lib/legal';
 import { useStore } from '@/lib/store';
 import { DEFAULT_CURRENCIES } from '@/lib/defaults';
 import { formatMoney, todayISO } from '@/lib/format';
-import { Moon, Sun, Monitor, Lock, Trash2, Bell, Coins, Calendar, FileText, Info, Tag, ChevronRight, Pause, Play, Pencil } from 'lucide-react-native';
+import { Moon, Sun, Monitor, Lock, Trash2, Bell, Coins, Calendar, FileText, Info, Tag, ChevronRight, Pause, Play, Pencil, Shield } from 'lucide-react-native';
 
 function formatBackupDate(iso: string): string {
   const d = new Date(iso);
@@ -28,6 +30,7 @@ export default function SettingsScreen() {
   const [categorySheet, setCategorySheet] = useState(false);
   const [aboutSheet, setAboutSheet] = useState(false);
   const [resetSheet, setResetSheet] = useState(false);
+  const [legalDoc, setLegalDoc] = useState<LegalDocId | null>(null);
   const [reminderStatus, setReminderStatus] = useState<string | null>(null);
 
   const recurringCount = useMemo(
@@ -150,7 +153,7 @@ export default function SettingsScreen() {
               <Chip key={c.code} label={`${c.symbol} ${c.code}`} selected={settings.currencyCode === c.code} onPress={() => updateSettings({ currencyCode: c.code })} />
             ))}
           </View>
-          <Pressable onPress={() => setRateSheet(true)} style={styles.subAction}>
+          <Pressable onPress={() => setRateSheet(true)} style={styles.subAction} accessibilityRole="button">
             <Text style={{ fontSize: 13, color: palette.primary, fontWeight: '600' }}>Edit exchange rates</Text>
           </Pressable>
           <Text style={{ fontSize: 11, color: palette.textMuted, marginTop: 4 }}>
@@ -161,11 +164,11 @@ export default function SettingsScreen() {
         {/* Profile */}
         <Card>
           <SectionTitle title="Your Profile" action={<Calendar size={16} color={palette.textMuted} />} />
-          <Pressable style={styles.rowAction} onPress={() => setAgeSheet(true)}>
+          <Pressable style={styles.rowAction} onPress={() => setAgeSheet(true)} accessibilityRole="button" accessibilityLabel={`Age, ${settings.age ?? 'not set'}`}>
             <Text style={{ fontSize: 14, color: palette.text }}>Age</Text>
             <Text style={{ fontSize: 14, color: palette.textMuted }}>{settings.age ?? 'Not set'}</Text>
           </Pressable>
-          <Pressable style={styles.rowAction} onPress={() => setReturnSheet(true)}>
+          <Pressable style={styles.rowAction} onPress={() => setReturnSheet(true)} accessibilityRole="button" accessibilityLabel={`Expected annual return, ${settings.expectedReturn ?? 10}%`}>
             <Text style={{ fontSize: 14, color: palette.text }}>Expected annual return</Text>
             <Text style={{ fontSize: 14, color: palette.textMuted }}>{settings.expectedReturn ?? 10}%</Text>
           </Pressable>
@@ -177,7 +180,7 @@ export default function SettingsScreen() {
         {/* Security */}
         <Card>
           <SectionTitle title="Security" action={<Lock size={16} color={palette.textMuted} />} />
-          <Pressable style={styles.rowAction} onPress={() => setPinSheet(true)}>
+          <Pressable style={styles.rowAction} onPress={() => setPinSheet(true)} accessibilityRole="button" accessibilityLabel={`App PIN, ${settings.pinEnabled ? 'enabled' : 'disabled'}`}>
             <Text style={{ fontSize: 14, color: palette.text }}>App PIN</Text>
             <Text style={{ fontSize: 14, color: palette.textMuted }}>{settings.pinEnabled ? 'Enabled' : 'Disabled'}</Text>
           </Pressable>
@@ -186,7 +189,7 @@ export default function SettingsScreen() {
         {/* Payments & cash */}
         <Card>
           <SectionTitle title="Payments & Cash" />
-          <Pressable style={styles.rowAction} onPress={() => updateSettings({ linkPaymentsToCash: !settings.linkPaymentsToCash })}>
+          <Pressable style={styles.rowAction} onPress={() => updateSettings({ linkPaymentsToCash: !settings.linkPaymentsToCash })} accessibilityRole="switch" accessibilityLabel="Deduct EMIs and SIPs from cash" accessibilityState={{ checked: settings.linkPaymentsToCash }}>
             <Text style={{ fontSize: 14, color: palette.text }}>Deduct EMIs & SIPs from cash</Text>
             <Text style={{ fontSize: 14, color: palette.textMuted }}>{settings.linkPaymentsToCash ? 'On' : 'Off'}</Text>
           </Pressable>
@@ -198,7 +201,7 @@ export default function SettingsScreen() {
         {/* Reminders */}
         <Card>
           <SectionTitle title="Reminders" action={<Bell size={16} color={palette.textMuted} />} />
-          <Pressable style={styles.rowAction} onPress={toggleReminders}>
+          <Pressable style={styles.rowAction} onPress={toggleReminders} accessibilityRole="switch" accessibilityLabel="Due date reminders" accessibilityState={{ checked: settings.reminderEnabled }}>
             <Text style={{ fontSize: 14, color: palette.text }}>Due date reminders</Text>
             <Text style={{ fontSize: 14, color: palette.textMuted }}>{settings.reminderEnabled ? 'On' : 'Off'}</Text>
           </Pressable>
@@ -212,6 +215,8 @@ export default function SettingsScreen() {
             <Pressable
               style={[styles.recurringRow, { borderTopColor: palette.border }]}
               onPress={() => setRecurringSheet(true)}
+              accessibilityRole="button"
+              accessibilityLabel={`${recurringCount} recurring item${recurringCount !== 1 ? 's' : ''}. View, pause, or resume`}
             >
               <View>
                 <Text style={{ fontSize: 13, fontWeight: '600', color: palette.text }}>
@@ -255,27 +260,51 @@ export default function SettingsScreen() {
             <Button label="Export Backup (JSON)" variant="outline" onPress={doExport} style={styles.dataBtn} />
             <Button label="Import Backup (JSON)" variant="outline" onPress={() => setImportSheet(true)} style={styles.dataBtn} />
             <Button label="Export Transactions (CSV)" variant="outline" onPress={doExportCsv} style={styles.dataBtn} />
-            <Button label="Reset All Data" variant="danger" onPress={confirmReset} style={styles.dataBtn} />
+            <Button label="Delete All Data" variant="danger" onPress={confirmReset} style={styles.dataBtn} />
           </View>
         </Card>
 
         {/* General */}
         <Card>
           <SectionTitle title="General" action={<Tag size={16} color={palette.textMuted} />} />
-          <Pressable style={styles.rowAction} onPress={() => setCategorySheet(true)}>
+          <Pressable style={styles.rowAction} onPress={() => setCategorySheet(true)} accessibilityRole="button" accessibilityLabel={`Manage categories, ${data.categories.length}`}>
             <Text style={{ fontSize: 14, color: palette.text }}>Manage categories</Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
               <Text style={{ fontSize: 14, color: palette.textMuted }}>{data.categories.length}</Text>
               <ChevronRight size={18} color={palette.textMuted} />
             </View>
           </Pressable>
-          <Pressable style={styles.rowAction} onPress={() => setAboutSheet(true)}>
+          <Pressable style={styles.rowAction} onPress={() => setAboutSheet(true)} accessibilityRole="button">
             <Text style={{ fontSize: 14, color: palette.text }}>About FinTrack & Help</Text>
             <ChevronRight size={18} color={palette.textMuted} />
           </Pressable>
         </Card>
 
-        <Text style={[styles.about, { color: palette.textMuted }]}>FinTrack · Offline personal finance · v1.0</Text>
+        {/* Legal */}
+        <Card>
+          <SectionTitle title="Legal & Privacy" action={<Shield size={16} color={palette.textMuted} />} />
+          {([
+            ['privacy', 'Privacy Policy'],
+            ['terms', 'Terms of Service'],
+            ['refund', 'Refund Policy'],
+            ['cookies', 'Cookie Policy'],
+            ['licenses', 'Open-source licences'],
+          ] as const).map(([id, title]) => (
+            <Pressable key={id} style={styles.rowAction} onPress={() => setLegalDoc(id)} accessibilityRole="button">
+              <Text style={{ fontSize: 14, color: palette.text }}>{title}</Text>
+              <ChevronRight size={18} color={palette.textMuted} />
+            </Pressable>
+          ))}
+          <Pressable style={styles.rowAction} onPress={confirmReset} accessibilityRole="button" accessibilityLabel="Delete my data">
+            <Text style={{ fontSize: 14, color: palette.danger, fontWeight: '600' }}>Delete my data</Text>
+            <ChevronRight size={18} color={palette.textMuted} />
+          </Pressable>
+          <Text style={{ fontSize: 11, color: palette.textMuted, marginTop: 4 }}>
+            {settings.legalAcceptedAt ? `You accepted the Terms and Privacy Policy on ${formatBackupDate(settings.legalAcceptedAt)}. ` : ''}We hold no copy of your data, so deleting it here removes it completely.
+          </Text>
+        </Card>
+
+        <Text style={[styles.about, { color: palette.textMuted }]}>FinTrack v{BUSINESS.version} · © {BUSINESS.developer}</Text>
       </ScrollView>
 
       <PinSheet visible={pinSheet} onClose={() => setPinSheet(false)} />
@@ -286,7 +315,8 @@ export default function SettingsScreen() {
       <RecurringItemsSheet visible={recurringSheet} onClose={() => setRecurringSheet(false)} />
       <CategorySheet visible={categorySheet} onClose={() => setCategorySheet(false)} />
       <AboutSheet visible={aboutSheet} onClose={() => setAboutSheet(false)} />
-      <ResetConfirmSheet visible={resetSheet} onClose={() => setResetSheet(false)} onConfirm={() => { resetData(); setResetSheet(false); }} />
+      <ResetConfirmSheet visible={resetSheet} onClose={() => setResetSheet(false)} onConfirm={() => { setResetSheet(false); resetData(); }} />
+      <LegalSheet doc={legalDoc} onClose={() => setLegalDoc(null)} />
     </SafeAreaView>
   );
 }
@@ -294,7 +324,7 @@ export default function SettingsScreen() {
 function ThemeOption({ icon, label, selected, onPress }: { icon: React.ReactNode; label: string; selected: boolean; onPress: () => void }) {
   const { palette } = useUi();
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => [styles.themeOpt, { backgroundColor: selected ? palette.primary + '22' : palette.surfaceAlt, borderColor: selected ? palette.primary : palette.border, opacity: pressed ? 0.8 : 1 }]}>
+    <Pressable onPress={onPress} accessibilityRole="radio" accessibilityLabel={`${label} theme`} accessibilityState={{ checked: selected }} style={({ pressed }) => [styles.themeOpt, { backgroundColor: selected ? palette.primary + '22' : palette.surfaceAlt, borderColor: selected ? palette.primary : palette.border, opacity: pressed ? 0.8 : 1 }]}>
       {icon}
       <Text style={{ fontSize: 12, fontWeight: '600', color: palette.text, marginTop: 4 }}>{label}</Text>
     </Pressable>
@@ -346,11 +376,14 @@ function AgeSheet({ visible, onClose }: { visible: boolean; onClose: () => void 
   const { data, palette } = useUi();
   const { updateSettings } = useStore();
   const [age, setAge] = useState(String(data.settings.age ?? ''));
+  const [error, setError] = useState<string | null>(null);
 
   const save = () => {
     if (age === '') { updateSettings({ age: null }); onClose(); return; }
     const n = Number(age);
-    if (!n || n < 18) return;
+    if (!n || n > 120) { setError('Please enter your age in years.'); return; }
+    if (n < 18) { setError('FinTrack is only for adults aged 18 and over.'); return; }
+    setError(null);
     updateSettings({ age: n });
     onClose();
   };
@@ -360,14 +393,15 @@ function AgeSheet({ visible, onClose }: { visible: boolean; onClose: () => void 
       <Field label="Age">
         <Input value={age} onChangeText={(t) => setAge(t.replace(/[^0-9]/g, '').slice(0, 3))} keyboardType="numeric" placeholder="e.g. 30" />
       </Field>
-      <Text style={{ fontSize: 11, color: palette.textMuted }}>Leave blank to clear. Age must be 18 or over.</Text>
+      {error && <Text accessibilityRole="alert" style={{ fontSize: 12, color: palette.danger, marginBottom: 4 }}>{error}</Text>}
+      <Text style={{ fontSize: 11, color: palette.textMuted }}>Leave blank to clear. Used only to suggest an allocation band; it stays on this device.</Text>
       <Button label="Save" onPress={save} style={{ marginTop: 8 }} />
     </Sheet>
   );
 }
 
 function ReturnRateSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
-  const { data } = useUi();
+  const { data, palette } = useUi();
   const { updateSettings } = useStore();
   const [rate, setRate] = useState(String(data.settings.expectedReturn ?? 10));
 
@@ -380,8 +414,8 @@ function ReturnRateSheet({ visible, onClose }: { visible: boolean; onClose: () =
 
   return (
     <Sheet visible={visible} onClose={onClose} title="Expected Annual Return">
-      <Text style={{ fontSize: 12, color: '#888', marginBottom: 8 }}>
-        Used to project how much you need to save monthly toward your goals. Default is 10% nominal (before tax and inflation) for a blended equity and debt mix; equities have averaged roughly 12% nominal in India, debt and FDs less.
+      <Text style={{ fontSize: 12, color: palette.textMuted, marginBottom: 8 }}>
+        Used to project how much you need to save monthly toward your goals. The default of 10% a year (before tax and inflation) is a placeholder assumption, not a forecast. Returns vary by asset and over time and can be negative, so pick a figure that suits your own mix.
       </Text>
       <Field label="Annual return %">
         <Input value={rate} onChangeText={(t) => setRate(t.replace(/[^0-9.]/g, ''))} keyboardType="numeric" placeholder="10" />
@@ -704,6 +738,8 @@ function RecurringItemsSheet({ visible, onClose }: { visible: boolean; onClose: 
               {item.status !== 'closed' && (
                 <Pressable
                   onPress={() => togglePause(item)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${isPaused ? 'Resume' : 'Pause'} ${item.name}`}
                   style={[styles.pauseBtn, { borderColor: isPaused ? palette.success : palette.warning }]}
                 >
                   {isPaused ? (
@@ -815,10 +851,10 @@ function CategorySheet({ visible, onClose }: { visible: boolean; onClose: () => 
           )}
         </View>
       </View>
-      <Pressable onPress={() => startEdit(cat)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Edit">
+      <Pressable onPress={() => startEdit(cat)} hitSlop={8} accessibilityRole="button" accessibilityLabel={`Edit ${cat.name}`}>
         <Pencil size={16} color={palette.primary} />
       </Pressable>
-      <Pressable onPress={() => handleDelete(cat)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Delete">
+      <Pressable onPress={() => handleDelete(cat)} hitSlop={8} accessibilityRole="button" accessibilityLabel={`Delete ${cat.name}`}>
         <Trash2 size={16} color={palette.danger} />
       </Pressable>
     </View>
@@ -907,7 +943,15 @@ function AboutSheet({ visible, onClose }: { visible: boolean; onClose: () => voi
     },
     {
       q: 'Is my data shared with anyone?',
-      a: 'No. FinTrack is fully offline. There are no analytics, no tracking, and no data sent to any server. What you enter stays on your device.',
+      a: 'No. FinTrack has no analytics, advertising or tracking SDKs and sends nothing to any server. Android system backup is turned off for the app, so your data is not copied to cloud device backups either.',
+    },
+    {
+      q: 'How do I delete my data?',
+      a: 'Settings → Delete All Data erases everything FinTrack stores, including previous-save copies, your PIN and scheduled reminders. Uninstalling the app does the same. We hold no copy, so there is nothing else to request.',
+    },
+    {
+      q: 'Does FinTrack cost anything?',
+      a: 'No. It is free, with no ads, subscriptions, in-app purchases or hidden fees.',
     },
   ];
 
@@ -917,13 +961,20 @@ function AboutSheet({ visible, onClose }: { visible: boolean; onClose: () => voi
         <View>
           <Text style={{ fontSize: 18, fontWeight: '800', color: palette.text }}>FinTrack</Text>
           <Text style={{ fontSize: 13, color: palette.textMuted, marginTop: 2 }}>
-            Offline personal finance tracker · v1.0
+            Offline personal finance tracker · v{BUSINESS.version}
+          </Text>
+        </View>
+
+        <View style={[styles.aboutCard, { backgroundColor: palette.surfaceAlt, borderColor: palette.border }]}>
+          <Text style={{ fontSize: 13, fontWeight: '600', color: palette.text, marginBottom: 4 }}>Developer</Text>
+          <Text style={{ fontSize: 12, color: palette.textMuted, lineHeight: 18 }} selectable>
+            {`${BUSINESS.developer}\n${BUSINESS.address}\n${BUSINESS.email}`}
           </Text>
         </View>
 
         <View style={[styles.aboutCard, { backgroundColor: palette.surfaceAlt, borderColor: palette.border }]}>
           <Text style={{ fontSize: 13, fontWeight: '600', color: palette.text, marginBottom: 4 }}>
-            100% Local, 0% Cloud
+            Stored on your device only
           </Text>
           <Text style={{ fontSize: 12, color: palette.textMuted, lineHeight: 18 }}>
             FinTrack stores all data on your device. No accounts, no sign-up, no internet required. Export a backup to keep your data safe.
@@ -935,6 +986,8 @@ function AboutSheet({ visible, onClose }: { visible: boolean; onClose: () => voi
           <Pressable
             key={i}
             style={[styles.faqRow, { borderBottomColor: palette.border }]}
+            accessibilityRole="button"
+            accessibilityState={{ expanded: openFaq === i }}
             onPress={() => setOpenFaq(openFaq === i ? null : i)}
           >
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -960,16 +1013,19 @@ function AboutSheet({ visible, onClose }: { visible: boolean; onClose: () => voi
 function ResetConfirmSheet({ visible, onClose, onConfirm }: { visible: boolean; onClose: () => void; onConfirm: () => void }) {
   const { palette } = useUi();
   return (
-    <Sheet visible={visible} onClose={onClose} title="Reset All Data">
+    <Sheet visible={visible} onClose={onClose} title="Delete All Data">
       <View style={{ gap: 14 }}>
         <View style={[styles.aboutCard, { backgroundColor: palette.danger + '11', borderColor: palette.danger + '44' }]}>
           <Text style={{ fontSize: 13, color: palette.danger, fontWeight: '600', lineHeight: 18 }}>
-            This permanently deletes all your transactions, assets, investments, debts, and goals. This cannot be undone.
+            This permanently deletes all your transactions, assets, investments, debts, goals and settings from this device, including previous-save copies, your PIN and scheduled reminders. This cannot be undone.
           </Text>
         </View>
+        <Text style={{ fontSize: 12, color: palette.textMuted, lineHeight: 18 }}>
+          Backup files you exported to other apps or services are outside FinTrack; delete those there. Export a backup first if you might want your data back.
+        </Text>
         <View style={{ flexDirection: 'row', gap: 10 }}>
           <Button label="Cancel" variant="outline" onPress={onClose} style={{ flex: 1 }} />
-          <Button label="Reset Everything" variant="danger" onPress={onConfirm} style={{ flex: 1 }} />
+          <Button label="Delete Everything" variant="danger" onPress={onConfirm} style={{ flex: 1 }} />
         </View>
       </View>
     </Sheet>

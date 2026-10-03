@@ -4,6 +4,16 @@ import { Button, Input, Field, useUi, Chip } from '../components/ui';
 import { useStore } from '../lib/store';
 import { bandForAge, bandLabelForAge } from '../lib/calc';
 import { formatPercent } from '../lib/format';
+import { ConsentChecks, acceptedLegalSettings } from './Legal';
+
+const UNDER_18 = 'FinTrack is only for adults aged 18 and over.';
+
+/** Error for an age entry, or null when it is a valid adult age. */
+function ageError(age: string): string | null {
+  const n = Number(age);
+  if (!n || n > 120) return 'Please enter your age in years.';
+  return n < 18 ? UNDER_18 : null;
+}
 
 export function Onboarding() {
   const { palette } = useUi();
@@ -13,11 +23,13 @@ export function Onboarding() {
   const [pin, setPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [consent, setConsent] = useState({ adult: false, terms: false });
 
   const finish = () => {
     const ageNum = Number(age);
-    if (!ageNum || ageNum < 18) {
-      setError('Please enter a valid age (18+).');
+    const ageProblem = ageError(age);
+    if (ageProblem) {
+      setError(ageProblem);
       return;
     }
     if (pin && pin !== confirmPin) {
@@ -35,7 +47,7 @@ export function Onboarding() {
       other: band.other,
       custom: false,
     });
-    updateSettings({ age: ageNum, onboarded: true });
+    updateSettings({ age: ageNum, onboarded: true, ...acceptedLegalSettings() });
     if (pin) savePin(pin);
   };
 
@@ -49,20 +61,22 @@ export function Onboarding() {
 
         {step === 0 && (
           <View style={styles.step}>
-            <Text style={[styles.heading, { color: palette.text }]}>Welcome</Text>
+            <Text style={[styles.heading, { color: palette.text }]} accessibilityRole="header">Welcome</Text>
             <Text style={[styles.body, { color: palette.textMuted }]}>
               FinTrack stores everything on this device only. No accounts, no cloud, no tracking. You can back up your data anytime from Settings.
             </Text>
             <View style={styles.spacer} />
-            <Button label="Get started" onPress={() => setStep(1)} />
+            <ConsentChecks value={consent} onChange={setConsent} />
+            <View style={styles.spacer} />
+            <Button label="Get started" onPress={() => setStep(1)} disabled={!consent.adult || !consent.terms} />
           </View>
         )}
 
         {step === 1 && (
           <View style={styles.step}>
-            <Text style={[styles.heading, { color: palette.text }]}>How old are you?</Text>
+            <Text style={[styles.heading, { color: palette.text }]} accessibilityRole="header">How old are you?</Text>
             <Text style={[styles.body, { color: palette.textMuted }]}>
-              We use your age to suggest a balanced investment allocation. You can change it later.
+              We use your age only to suggest an investment allocation band. It stays on this device and you can change it later.
             </Text>
             <View style={styles.spacer} />
             <Field label="Your age">
@@ -73,11 +87,12 @@ export function Onboarding() {
                 placeholder="e.g. 30"
               />
             </Field>
-            {age ? (
+            {age && !ageError(age) ? (
               <View style={[styles.bandCard, { backgroundColor: palette.surfaceAlt, borderColor: palette.border }]}>
                 <Text style={[styles.bandTitle, { color: palette.text }]}>
                   Suggested band: {bandLabelForAge(Number(age))}
                 </Text>
+                <Text style={{ fontSize: 11, color: palette.textMuted, marginBottom: 8 }}>A general rule of thumb based on age, not personal financial advice.</Text>
                 <View style={styles.bandGrid}>
                   {(['stocks','mutualfund','fd','ppf','gold','crypto','other'] as const).map((k) => {
                     const band = bandForAge(Number(age));
@@ -90,13 +105,13 @@ export function Onboarding() {
                 </View>
               </View>
             ) : null}
-            {error ? <Text style={[styles.error, { color: palette.danger }]}>{error}</Text> : null}
+            {error ? <Text accessibilityRole="alert" accessibilityLiveRegion="polite" style={[styles.error, { color: palette.danger }]}>{error}</Text> : null}
             <View style={styles.row}>
               <Button label="Back" variant="outline" onPress={() => setStep(0)} />
               <View style={{ width: 12 }} />
               <Button label="Next" onPress={() => {
-                const n = Number(age);
-                if (!n || n < 18) { setError('Please enter a valid age (18+).'); return; }
+                const problem = ageError(age);
+                if (problem) { setError(problem); return; }
                 setError(null);
                 setStep(2);
               }} />
@@ -106,7 +121,7 @@ export function Onboarding() {
 
         {step === 2 && (
           <View style={styles.step}>
-            <Text style={[styles.heading, { color: palette.text }]}>Set an app PIN (optional)</Text>
+            <Text style={[styles.heading, { color: palette.text }]} accessibilityRole="header">Set an app PIN (optional)</Text>
             <Text style={[styles.body, { color: palette.textMuted }]}>
               Since your financial data lives only on this device, a PIN keeps it private if someone else uses your phone. You can skip this and add it later.
             </Text>
@@ -119,7 +134,7 @@ export function Onboarding() {
                 <Input value={confirmPin} onChangeText={(t) => { setConfirmPin(t.replace(/[^0-9]/g, '').slice(0, 4)); setError(null); }} keyboardType="numeric" placeholder="Re-enter PIN" />
               </Field>
             )}
-            {error ? <Text style={[styles.error, { color: palette.danger }]}>{error}</Text> : null}
+            {error ? <Text accessibilityRole="alert" accessibilityLiveRegion="polite" style={[styles.error, { color: palette.danger }]}>{error}</Text> : null}
             <View style={styles.row}>
               <Button label="Back" variant="outline" onPress={() => setStep(1)} />
               <View style={{ width: 12 }} />

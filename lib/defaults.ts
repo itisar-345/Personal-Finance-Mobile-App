@@ -52,6 +52,9 @@ export const DEFAULT_SETTINGS: Settings = {
   lastBackupDate: null,
   linkPaymentsToCash: false,
   cashLinkStart: null,
+  legalAcceptedVersion: null,
+  legalAcceptedAt: null,
+  questGoalId: null,
 };
 
 export const DEFAULT_DATA: AppData = {
@@ -62,6 +65,7 @@ export const DEFAULT_DATA: AppData = {
   debts: [],
   goals: [],
   contributions: [],
+  questLog: [],
   settings: DEFAULT_SETTINGS,
 };
 

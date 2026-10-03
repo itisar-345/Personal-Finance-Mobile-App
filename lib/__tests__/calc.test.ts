@@ -139,6 +139,7 @@ describe('netWorth and computeRatios', () => {
         debts: [debt({ id: 'd', outstanding: 1000, emi: 100, interestRate: 12 })],
         goals: [],
         contributions: [],
+        questLog: [],
         settings: {} as never,
       },
       '2024-06-01',
@@ -155,6 +156,7 @@ describe('netWorth and computeRatios', () => {
       investments: [],
       goals: [],
       contributions: [],
+      questLog: [],
       settings: {} as never,
     };
     const assets = [{ id: 'a', type: 'cash' as const, name: 'Cash', value: 1000, liquid: true, date: '2024-01-01' }];

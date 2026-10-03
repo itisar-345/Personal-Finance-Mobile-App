@@ -63,7 +63,7 @@ function GoalsTab() {
     <View style={{ gap: 14 }}>
       <Card>
         <SectionTitle title="Your Goals" action={
-          <Pressable onPress={() => setSheetOpen(true)}>
+          <Pressable onPress={() => setSheetOpen(true)} accessibilityRole="button" accessibilityLabel="Add goal">
             <Text style={{ fontSize: 12, color: palette.primary, fontWeight: '600' }}>+ Add</Text>
           </Pressable>
         } />
@@ -90,10 +90,10 @@ function GoalsTab() {
                     <Text style={{ fontSize: 15, fontWeight: '700', color: palette.text }}>{g.name}</Text>
                     <Text style={{ fontSize: 11, color: palette.textMuted }}>{g.kind} · {months} mo left{g.linkedIds?.length ? ` · linked to ${g.linkedIds.length} holding${g.linkedIds.length === 1 ? '' : 's'}` : ''}</Text>
                   </View>
-                  <Pressable onPress={() => setEditingGoal(g)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Edit">
+                  <Pressable onPress={() => setEditingGoal(g)} hitSlop={8} accessibilityRole="button" accessibilityLabel={`Edit ${g.name}`}>
                     <Pencil size={16} color={palette.primary} />
                   </Pressable>
-                  <Pressable onPress={() => setPendingDelete(g)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Delete">
+                  <Pressable onPress={() => setPendingDelete(g)} hitSlop={8} accessibilityRole="button" accessibilityLabel={`Delete ${g.name}`}>
                     <Trash2 size={16} color={palette.danger} />
                   </Pressable>
                 </View>
@@ -274,7 +274,16 @@ function SimulatorTab() {
         <Text style={{ fontSize: 12, color: final >= currentNw ? palette.success : palette.danger }}>
           {final >= currentNw ? '+' : ''}{formatMoney(final - currentNw, currency, { compact: true })} from today
         </Text>
-        {projection.length > 1 && <LineChart data={projection} height={150} />}
+        {projection.length > 1 && (
+          <LineChart
+            data={projection}
+            height={150}
+            description={`Projected net worth rising from ${formatMoney(currentNw, currency, { compact: true })} today to ${formatMoney(final, currency, { compact: true })} in ${yearsNum} years`}
+          />
+        )}
+        <Text style={{ fontSize: 11, color: palette.textMuted, marginTop: 6 }}>
+          Illustration only: assumes a constant {retNum}% annual return. Real returns vary and can be negative. Not financial advice.
+        </Text>
       </Card>
     </View>
   );

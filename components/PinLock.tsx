@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, Pressable } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { View, Text, StyleSheet, Pressable, Platform } from 'react-native';
 import { useUi } from './ui';
 import { useStore } from '../lib/store';
 import { verifyPin } from '../lib/crypto';
@@ -62,10 +62,23 @@ export function PinLock({ onUnlock }: { onUnlock: () => void }) {
       .finally(() => setChecking(false));
   };
 
+  // Let keyboard users type the PIN on web instead of tabbing through the on-screen keypad.
+  const pressRef = useRef(press);
+  pressRef.current = press;
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const onKey = (e: KeyboardEvent) => {
+      if (/^[0-9]$/.test(e.key)) pressRef.current(e.key);
+      else if (e.key === 'Backspace') setEntry((x) => x.slice(0, -1));
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   return (
     <View style={[styles.container, { backgroundColor: palette.bg }]}>
-      <Text style={[styles.title, { color: palette.text }]}>Enter PIN</Text>
-      <View style={styles.dots}>
+      <Text style={[styles.title, { color: palette.text }]} accessibilityRole="header">Enter PIN</Text>
+      <View style={styles.dots} accessible accessibilityLabel={`${entry.length} of 4 digits entered`}>
         {[0, 1, 2, 3].map((i) => (
           <View
             key={i}
@@ -77,9 +90,9 @@ export function PinLock({ onUnlock }: { onUnlock: () => void }) {
         ))}
       </View>
       {locked ? (
-        <Text style={[styles.error, { color: palette.danger }]}>Too many attempts. Try again in {secondsLeft}s.</Text>
+        <Text accessibilityRole="alert" accessibilityLiveRegion="polite" style={[styles.error, { color: palette.danger }]}>Too many attempts. Try again in {secondsLeft}s.</Text>
       ) : error ? (
-        <Text style={[styles.error, { color: palette.danger }]}>Incorrect PIN</Text>
+        <Text accessibilityRole="alert" accessibilityLiveRegion="polite" style={[styles.error, { color: palette.danger }]}>Incorrect PIN</Text>
       ) : null}
       <View style={styles.pad}>
         {['1','2','3','4','5','6','7','8','9','','0','⌫'].map((d, i) =>

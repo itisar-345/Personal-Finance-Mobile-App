@@ -88,7 +88,7 @@ export default function TransactionsScreen() {
     <SafeAreaView edges={['top', 'left', 'right']} style={[styles.container, { backgroundColor: palette.bg }]}>
       <View style={styles.header}>
         <Text style={[styles.screenTitle, { color: palette.text }]}>Transactions</Text>
-        <Pressable style={[styles.fab, { backgroundColor: palette.primary }]} onPress={() => setSheetOpen(true)}>
+        <Pressable style={[styles.fab, { backgroundColor: palette.primary }]} onPress={() => setSheetOpen(true)} accessibilityRole="button" accessibilityLabel="Add transaction">
           <Plus size={22} color={palette.primaryText} />
         </Pressable>
       </View>
@@ -193,7 +193,7 @@ export default function TransactionsScreen() {
                   {group.items.map((t) => {
                     const cat = catMap.get(t.categoryId);
                     return (
-                      <Pressable key={t.id} style={styles.txnRow} onPress={() => setEditTxn(t.recurringRef ? data.transactions.find((source) => source.id === t.recurringRef) || t : t)}>
+                      <Pressable key={t.id} style={styles.txnRow} accessibilityRole="button" accessibilityHint="Opens the transaction to edit" onPress={() => setEditTxn(t.recurringRef ? data.transactions.find((source) => source.id === t.recurringRef) || t : t)}>
                         <View style={[styles.txnIcon, { backgroundColor: (t.type === 'income' ? palette.success : palette.danger) + '22' }]}>
                           <Text style={{ fontSize: 16, fontWeight: '700', color: t.type === 'income' ? palette.success : palette.danger }}>
                             {t.type === 'income' ? '↑' : '↓'}
@@ -238,7 +238,7 @@ export default function TransactionsScreen() {
                     onReopen={() => setTransactionStatus(t.id, 'active')}
                   />
                 </View>
-                <Pressable onPress={() => setPendingDelete(t)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Delete">
+                <Pressable onPress={() => setPendingDelete(t)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Delete transaction">
                   <Trash2 size={16} color={palette.danger} />
                 </Pressable>
               </View>

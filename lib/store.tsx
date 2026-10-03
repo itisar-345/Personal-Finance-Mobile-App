@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
-import { readData, writeData } from './storage';
+import { readData, writeData, wipeData } from './storage';
+import { cancelAllNotifications } from './notifications';
 import type {
   AppData,
   Transaction,
@@ -14,12 +15,14 @@ import type {
   Currency,
   ItemStatus,
   SkippedRange,
+  QuestCompletion,
 } from './types';
 import { DEFAULT_DATA, genId } from './defaults';
 import { ALLOCATION_KEYS, bandForAge, assetsAfterPayments } from './calc';
 import { hashPin } from './crypto';
 import { savePinHash } from './pinStorage';
 import { isValidIsoDate, todayISO } from './format';
+import { completionXp } from './quests';
 
 interface StoreContextValue {
   data: AppData;
@@ -47,7 +50,7 @@ interface StoreContextValue {
   updateDebt: (id: string, d: Partial<Debt>) => void;
   deleteDebt: (id: string) => void;
   // goals
-  addGoal: (g: Omit<Goal, 'id'>) => void;
+  addGoal: (g: Omit<Goal, 'id'>) => string;
   updateGoal: (id: string, g: Partial<Goal>) => void;
   deleteGoal: (id: string) => void;
   // contributions
@@ -59,13 +62,18 @@ interface StoreContextValue {
   setTransactionStatus: (id: string, status: ItemStatus, date?: string) => void;
   setInvestmentStatus: (id: string, status: ItemStatus, date?: string) => void;
   setDebtStatus: (id: string, status: ItemStatus, date?: string) => void;
+  // micro-quests
+  /** Log a completed quest and credit its amount to the quest goal (manual goals only). */
+  completeQuest: (questId: string, amount: number, note?: string) => void;
+  /** Remove a completion and take its amount back out of the goal it was credited to. */
+  undoQuestCompletion: (id: string) => void;
   // settings
   updateSettings: (s: Partial<Settings>) => void;
   setPin: (pin: string | null) => Promise<void>;
   setAllocationTargets: (t: AllocationTarget) => void;
   // bulk
   importData: (d: AppData) => void;
-  resetData: () => void;
+  resetData: () => Promise<void>;
   exportData: () => AppData;
 }
 
@@ -111,6 +119,11 @@ function commitLiveCash(data: AppData): AppData {
     assets: assetsAfterPayments(data.assets, data.debts, data.investments, data.contributions, settings.cashLinkStart, today),
     settings: { ...settings, cashLinkStart: today },
   };
+}
+
+/** Quests only credit manual goals: a linked goal's saved amount is derived from its holdings, so a deposit would be lost. */
+export function isQuestGoal(goal: Goal | undefined): goal is Goal {
+  return !!goal && !goal.linkedIds?.length;
 }
 
 /** Drop a deleted holding from every goal's links; a goal left with no links reverts to its manual amounts. */
@@ -258,6 +271,18 @@ function normalizeData(input?: Partial<AppData> | null): AppData {
           startDate: dateOr(c.startDate, date),
         } as Contribution
         : null),
+    questLog: cleanList<QuestCompletion>(input?.questLog, (c) =>
+      isStr(c.id) && isStr(c.questId) && isNum(c.amount) && c.amount >= 0
+        ? {
+          id: c.id,
+          questId: c.questId,
+          amount: c.amount,
+          date: dateOr(c.date, date),
+          xp: isNum(c.xp) && c.xp >= 0 ? c.xp : 0,
+          goalId: isStr(c.goalId) ? c.goalId : null,
+          note: typeof c.note === 'string' ? c.note : undefined,
+        }
+        : null),
     settings: {
       ...DEFAULT_DATA.settings,
       ...settings,
@@ -266,6 +291,8 @@ function normalizeData(input?: Partial<AppData> | null): AppData {
       currencyCode,
       expectedReturn: isNum(settings.expectedReturn) ? settings.expectedReturn : DEFAULT_DATA.settings.expectedReturn,
       age: isNum(settings.age) && settings.age > 0 && settings.age < 130 ? settings.age : null,
+      legalAcceptedVersion: isStr(settings.legalAcceptedVersion) ? settings.legalAcceptedVersion : null,
+      legalAcceptedAt: isStr(settings.legalAcceptedAt) ? settings.legalAcceptedAt : null,
       allocationTargets: isObj(settings.allocationTargets) && ALLOCATION_KEYS.every((k) => isNum((settings.allocationTargets as any)[k]))
         ? settings.allocationTargets
         : null,
@@ -274,6 +301,7 @@ function normalizeData(input?: Partial<AppData> | null): AppData {
       pinEnabled: settings.pinEnabled === true,
       pinFailedAttempts: isNum(settings.pinFailedAttempts) ? settings.pinFailedAttempts : 0,
       pinLockedUntil: isNum(settings.pinLockedUntil) ? settings.pinLockedUntil : null,
+      questGoalId: isStr(settings.questGoalId) ? settings.questGoalId : null,
     },
   };
 }
@@ -537,12 +565,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const addGoal = useCallback((g: Omit<Goal, 'id'>) => {
+  const addGoal = useCallback((g: Omit<Goal, 'id'>): string => {
+    const id = genId('goal');
     setData((prev) => {
-      const next = { ...prev, goals: [...prev.goals, { ...g, id: genId('goal') }] };
+      const next = { ...prev, goals: [...prev.goals, { ...g, id }] };
       save(next);
       return next;
     });
+    return id;
   }, []);
 
   const updateGoal = useCallback((id: string, g: Partial<Goal>) => {
@@ -555,7 +585,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const deleteGoal = useCallback((id: string) => {
     setData((prev) => {
-      const next = { ...prev, goals: prev.goals.filter((x) => x.id !== id) };
+      const next = {
+        ...prev,
+        goals: prev.goals.filter((x) => x.id !== id),
+        settings: prev.settings.questGoalId === id ? { ...prev.settings, questGoalId: null } : prev.settings,
+      };
       save(next);
       return next;
     });
@@ -617,6 +651,47 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
+  const completeQuest = useCallback((questId: string, amount: number, note?: string) => {
+    if (!Number.isFinite(amount) || amount <= 0) return;
+    setData((prev) => {
+      const today = todayISO();
+      const goal = prev.goals.find((g) => g.id === prev.settings.questGoalId);
+      const goalId = isQuestGoal(goal) ? goal.id : null;
+      const entry: QuestCompletion = {
+        id: genId('qst'),
+        questId,
+        date: today,
+        amount,
+        xp: completionXp(questId, amount, prev.questLog, today),
+        goalId,
+        note: note?.trim() || undefined,
+      };
+      const next = {
+        ...prev,
+        questLog: [...prev.questLog, entry],
+        goals: goalId ? prev.goals.map((g) => (g.id === goalId ? { ...g, currentAmount: g.currentAmount + amount } : g)) : prev.goals,
+      };
+      save(next);
+      return next;
+    });
+  }, []);
+
+  const undoQuestCompletion = useCallback((id: string) => {
+    setData((prev) => {
+      const entry = prev.questLog.find((c) => c.id === id);
+      if (!entry) return prev;
+      const next = {
+        ...prev,
+        questLog: prev.questLog.filter((c) => c.id !== id),
+        goals: prev.goals.map((g) => (g.id === entry.goalId && isQuestGoal(g)
+          ? { ...g, currentAmount: Math.max(0, g.currentAmount - entry.amount) }
+          : g)),
+      };
+      save(next);
+      return next;
+    });
+  }, []);
+
   const updateSettings = useCallback(async (s: Partial<Settings>) => {
     const patch = { ...s };
     setData((prev) => {
@@ -658,8 +733,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     persist({ ...imported, settings: { ...imported.settings, pinEnabled: false, pinFailedAttempts: 0, pinLockedUntil: null, onboarded: true } });
   }, [persist]);
 
-  const resetData = useCallback(() => {
-    savePinHash(null);
+  /** Delete all data: wipe every on-disk copy, the PIN and any scheduled reminders, then start fresh. */
+  const resetData = useCallback(async () => {
+    await Promise.all([wipeData(), savePinHash(null), cancelAllNotifications().catch(() => {})]);
     persist(normalizeData(DEFAULT_DATA));
   }, [persist]);
 
@@ -695,6 +771,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     updateContribution,
     deleteContribution,
     setContributionStatus,
+    completeQuest,
+    undoQuestCompletion,
     setTransactionStatus,
     setInvestmentStatus,
     setDebtStatus,

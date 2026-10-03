@@ -3,7 +3,9 @@ import { Platform } from 'react-native';
 import type { AppData } from './types';
 import { formatMoney, getCurrency } from './format';
 
-const REMINDER_CHANNEL_ID = 'payment-reminders';
+// Android fixes a channel's settings once created, so hiding content on the lock screen needed a new id.
+const REMINDER_CHANNEL_ID = 'payment-reminders-private';
+const LEGACY_CHANNEL_ID = 'payment-reminders';
 type ReminderFrequency = 'monthly' | 'yearly' | 'weekly' | 'quarterly';
 
 Notifications.setNotificationHandler({
@@ -22,7 +24,10 @@ export async function initializeNotifications(): Promise<void> {
     name: 'Payment reminders',
     importance: Notifications.AndroidImportance.HIGH,
     sound: 'default',
+    // Reminders include amounts; keep them off a secure lock screen.
+    lockscreenVisibility: Notifications.AndroidNotificationVisibility.PRIVATE,
   });
+  await Notifications.deleteNotificationChannelAsync(LEGACY_CHANNEL_ID).catch(() => {});
 }
 
 export async function requestNotificationPermission(): Promise<boolean> {

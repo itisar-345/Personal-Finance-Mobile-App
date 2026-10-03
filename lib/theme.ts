@@ -13,22 +13,26 @@ export interface Palette {
   success: string;
   warning: string;
   danger: string;
+  /** Text on a solid `danger` background. */
+  dangerText: string;
   accent: string;
   chart: string[];
 }
 
+// Text colours are chosen to meet WCAG AA contrast (4.5:1) against bg, surface and surfaceAlt.
 export const LIGHT: Palette = {
   bg: '#F5F7FA',
   surface: '#FFFFFF',
   surfaceAlt: '#EEF1F6',
   border: '#E2E8F0',
   text: '#0F172A',
-  textMuted: '#64748B',
+  textMuted: '#475569',
   primary: '#0F766E',
   primaryText: '#FFFFFF',
-  success: '#16A34A',
-  warning: '#D97706',
-  danger: '#DC2626',
+  success: '#15803D',
+  warning: '#B45309',
+  danger: '#B91C1C',
+  dangerText: '#FFFFFF',
   accent: '#0EA5E9',
   chart: ['#0F766E', '#0EA5E9', '#D97706', '#7C3AED', '#DC2626', '#16A34A', '#64748B'],
 };
@@ -45,6 +49,7 @@ export const DARK: Palette = {
   success: '#4ADE80',
   warning: '#FBBF24',
   danger: '#F87171',
+  dangerText: '#2A0A0A',
   accent: '#38BDF8',
   chart: ['#2DD4BF', '#38BDF8', '#FBBF24', '#A78BFA', '#F87171', '#4ADE80', '#94A3B8'],
 };
